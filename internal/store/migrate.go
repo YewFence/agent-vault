@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -93,16 +94,15 @@ func CountDestinationData(dst *SQLStore) (string, error) {
 	return "", nil
 }
 
-// MigrateData copies all data from src (SQLite) to dst (Postgres) in
-// foreign-key dependency order. Both stores must already be open and
-// fully migrated. The caller should ensure that dst is empty (aside from
-// the seeded default vault row).
+// MigrateData copies all data between SQLite and Postgres in foreign-key
+// dependency order. Both stores must already be open and fully migrated.
+// The caller should ensure that dst is empty (aside from the seeded default
+// vault row).
 //
 // progressFn is called with (tableName, rowCount) after each table is copied.
 func MigrateData(ctx context.Context, src, dst *SQLStore, progressFn func(table string, rows int)) error {
-	// Use a single Postgres transaction for the entire copy so we get
-	// atomic all-or-nothing semantics. Tables are copied in FK
-	// dependency order so referential integrity is maintained.
+	// Use a single destination transaction for atomic all-or-nothing semantics.
+	// Tables are copied in FK dependency order so referential integrity holds.
 	tx, err := dst.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning destination transaction: %w", err)
@@ -150,8 +150,20 @@ func MigrateData(ctx context.Context, src, dst *SQLStore, progressFn func(table 
 		}
 	}
 
-	// Update Postgres sequences for SERIAL columns so new inserts get the
-	// correct next value.
+	if dst.dialect.Name() == "postgres" {
+		if err := updatePostgresSequences(ctx, tx); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing migration transaction: %w", err)
+	}
+
+	return nil
+}
+
+func updatePostgresSequences(ctx context.Context, tx *sql.Tx) error {
 	seqUpdates := []struct {
 		seq   string
 		table string
@@ -166,21 +178,13 @@ func MigrateData(ctx context.Context, src, dst *SQLStore, progressFn func(table 
 		if err := tx.QueryRowContext(ctx, fmt.Sprintf("SELECT MAX(id) FROM %s", su.table)).Scan(&maxID); err != nil {
 			return fmt.Errorf("querying max id for %s: %w", su.table, err)
 		}
-		if maxID.Valid && maxID.Int64 > 0 {
-			_, err := tx.ExecContext(ctx, fmt.Sprintf(
-				"SELECT setval('%s', %d)",
-				su.seq, maxID.Int64,
-			))
-			if err != nil {
-				return fmt.Errorf("updating sequence %s: %w", su.seq, err)
-			}
+		if !maxID.Valid || maxID.Int64 <= 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SELECT setval('%s', %d)", su.seq, maxID.Int64)); err != nil {
+			return fmt.Errorf("updating sequence %s: %w", su.seq, err)
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing migration transaction: %w", err)
-	}
-
 	return nil
 }
 
@@ -1217,6 +1221,78 @@ func MigrateCAFromDisk(ctx context.Context, dst *SQLStore, caDir string) (bool, 
 		return false, fmt.Errorf("writing CA state: %w", err)
 	}
 	return true, nil
+}
+
+// MigrateCAToDisk exports database-backed CA state to the files used by a
+// SQLite deployment. Existing CA files are never overwritten.
+func MigrateCAToDisk(ctx context.Context, src *SQLStore, caDir string) (bool, error) {
+	state, err := src.GetCAState(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reading CA state: %w", err)
+	}
+	if state == nil {
+		return false, nil
+	}
+
+	certPath := filepath.Join(caDir, "ca.crt.pem")
+	keyPath := filepath.Join(caDir, "ca.key.enc")
+	for _, path := range []string{certPath, keyPath} {
+		if _, err := os.Stat(path); err == nil {
+			return false, fmt.Errorf("refusing to overwrite existing CA file %s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("checking %s: %w", path, err)
+		}
+	}
+
+	if err := os.MkdirAll(caDir, 0700); err != nil {
+		return false, fmt.Errorf("creating CA directory: %w", err)
+	}
+	if err := os.Chmod(caDir, 0700); err != nil {
+		return false, fmt.Errorf("setting CA directory permissions: %w", err)
+	}
+
+	keyJSON, err := json.Marshal(encryptedKeyJSON{
+		Nonce:      base64.StdEncoding.EncodeToString(state.RootKeyNonce),
+		Ciphertext: base64.StdEncoding.EncodeToString(state.RootKeyCT),
+	})
+	if err != nil {
+		return false, fmt.Errorf("marshaling encrypted CA key: %w", err)
+	}
+
+	if err := writeMigrationFileAtomic(certPath, state.RootCert, 0644); err != nil {
+		return false, fmt.Errorf("writing %s: %w", certPath, err)
+	}
+	if err := writeMigrationFileAtomic(keyPath, keyJSON, 0600); err != nil {
+		_ = os.Remove(certPath)
+		return false, fmt.Errorf("writing %s: %w", keyPath, err)
+	}
+	return true, nil
+}
+
+func writeMigrationFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // readFileIfExists reads the named file, returning nil (not an error) when
