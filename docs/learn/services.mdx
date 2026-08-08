@@ -196,8 +196,9 @@ The agent then sends `GET https://api.twilio.com/2010-04-01/Accounts/__account_s
 ### Field reference
 
 - `key` — UPPER_SNAKE_CASE credential reference. Must resolve to a credential in the vault or a slot in the same proposal.
-- `placeholder` — the exact wire string Agent Vault matches **case-sensitively** as a literal. Operators choose the string; the broker does not auto-wrap delimiters around it. The recommended convention is `__name__` (double-underscore-bounded snake_case).
+- `placeholder` — the exact wire string Agent Vault matches **case-sensitively** as a literal. Operators choose the string; the broker does not auto-wrap delimiters around it. Two recommended conventions: `__name__` (double-underscore-bounded snake_case), or a **credential-shaped** value like `github_pat_thisisaplaceholder00…0` that mimics the real credential's prefix and length so SDK/static format checks pass (see below).
 - `in` — list of surfaces the broker is allowed to scan. Subset of `path`, `query`, `header`, `body`, `websocket`. Defaults to `[path, query]` if omitted. `header`, `body`, and `websocket` must be explicit.
+- `env` — optional environment variable name for `agent-vault run`'s placeholder injection (below). When omitted, the substitution is not injected into the child environment. Set it to the variable the agent's SDK reads (e.g. credential `ACME_GH_TOKEN`, `env: GITHUB_TOKEN`). Any valid shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) is accepted.
 
 ### Scoping is the security boundary
 
@@ -210,9 +211,15 @@ Use this property to pick a narrow `in` for strong secrets: keep `in: [query]` a
 The validator rejects placeholders that would cause false-positive substitutions in legitimate URL content:
 
 - **Length** ≥ 4 characters.
-- **Must contain a `__` sequence or a non-`[A-Za-z0-9_]` character** — so a bare word like `account_sid` is rejected (it could appear as a real path segment), while `__account_sid__`, `sid.value`, `sid-val`, and `~sid~` all pass.
+- **Must contain a `__` sequence or a non-`[A-Za-z0-9_]` character** — so a bare word like `account_sid` is rejected (it could appear as a real path segment), while `__account_sid__`, `sid.value`, `sid-val`, and `~sid~` all pass. **Exemption:** values containing `placeholder` (case-insensitive) skip this rule — they are self-documenting by construction, which is what makes credential-shaped values like `github_pat_thisisaplaceholder00…0` valid.
 - **At least one alphanumeric character** — strings made entirely of delimiters like `____` or `~~~~` are rejected because they would aggressively match URL punctuation.
 - **Only RFC 3986 unreserved characters** `[A-Za-z0-9_-.~]` are permitted, so the placeholder survives any HTTP client / SDK / middlebox without percent-encoding round-trips.
+
+### Credential-shaped placeholders and env delivery
+
+The `__name__` convention works when the agent can be told the literal string, but many agents and SDKs *require* a credential-shaped value to even start — a GitHub SDK wants something matching `github_pat_\w{82}`, a config validator may check length and charset. For those, pick a placeholder that is spec-realistic: vendor prefix + a readable marker + zero padding to the real length, e.g. `github_pat_thisisaplaceholder0000000000000000000000000000000000000000000000000000000000000000` (93 chars, exactly like a real fine-grained PAT). The `thisisaplaceholder` marker makes it obvious to a human reader that the value is fake; the zeros are a conventional dummy filler valid in every mainstream credential charset. The service catalog carries `placeholder_prefix`/`placeholder_length` suggestions for common providers to pre-fill this shape — but the field is free-form, and any string that passes the safety rules above works.
+
+When a substitution explicitly configures `env`, `agent-vault run` hands its placeholder to the child process under that exact name — e.g. `GITHUB_TOKEN=github_pat_thisisaplaceholder00…0`. Substitutions without `env` do not affect the child environment. Any parent-environment values for configured names are scrubbed first, so the agent never sees a real credential that happened to be set outside the vault. If two substitutions use the same env name with different placeholders, the later service wins and a warning is printed. Substitution delivery works in both `host` and `container` isolation modes.
 
 ### `header` scope is request-wide
 

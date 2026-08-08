@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/isolation"
 	"github.com/Infisical/agent-vault/internal/session"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -69,6 +70,12 @@ both point at the same proxy URL — the listener accepts
 CONNECT for https:// upstreams and absolute-form forward-proxy requests
 for http:// on the same port. The root CA PEM is written to
 ~/.agent-vault/mitm-ca.pem.
+
+For every service substitution with an explicit env setting, the child also
+receives ENV=<placeholder> (e.g. GITHUB_TOKEN=github_pat_thisisaplaceholder00…0):
+a spec-shaped fake value that passes SDK/static format checks, which the
+broker rewrites to the real credential on the wire. Any pre-existing
+parent-env values for those configured names are scrubbed first.
 
 Example:
   ` + examplePrefix + ` -- claude
@@ -196,6 +203,16 @@ func runCmdRunE(cmd *cobra.Command, args []string) error {
 		"AGENT_VAULT_ADDR="+addr,
 		"AGENT_VAULT_VAULT="+vault,
 	)
+
+	// 5b. Inject credential-shaped placeholders for substitution services
+	//     (GITHUB_TOKEN=github_pat_thisisaplaceholder00…0): the agent gets
+	//     a spec-realistic fake value that passes SDK/static format checks,
+	//     and the broker rewrites it to the real credential on the wire.
+	//     Pre-existing parent-env values for those keys are stripped inside.
+	env, err = augmentEnvWithPlaceholders(env, addr, token, vault)
+	if err != nil {
+		return err
+	}
 
 	// 6. Route the child's HTTP and HTTPS traffic through the transparent
 	//    MITM proxy. The MITM ingress is the only credential-injection
@@ -509,6 +526,77 @@ func stripEnvKeys(env []string, keys map[string]struct{}) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// augmentEnvWithPlaceholders fetches the vault's services and injects
+// ENV=placeholder entries for every substitution with an explicit env setting
+// on an enabled service. Pre-existing entries for those names are stripped first:
+// a real credential sitting in the parent env must not survive into the
+// child — scrubbing it is what makes the placeholder the only value the
+// agent ever sees. Returns env unchanged when no enabled substitution
+// configures env; a fetch error is fatal to the run (mirrors the
+// Infisical agent-proxy semantics) so a silent skip can't leave the
+// agent without the env values its SDK checks expect.
+func augmentEnvWithPlaceholders(env []string, addr, token, vault string) ([]string, error) {
+	placeholders, err := fetchServicePlaceholders(addr, token, vault)
+	if err != nil {
+		return nil, err
+	}
+	if len(placeholders) == 0 {
+		return env, nil
+	}
+	keys := make(map[string]struct{}, len(placeholders))
+	for k := range placeholders {
+		keys[k] = struct{}{}
+	}
+	env = stripEnvKeys(env, keys)
+	for k, v := range placeholders {
+		env = append(env, k+"="+v)
+	}
+	return env, nil
+}
+
+// fetchServicePlaceholders returns env var name → placeholder for substitutions
+// with an explicit env setting on the vault's enabled services.
+// When two substitutions resolve to the same env name with different
+// placeholders the later one wins and a warning is printed — a single
+// env slot can't hold both. Identical duplicates are harmless
+// (per-service match scoping keeps the rewrite unambiguous) and pass
+// silently.
+func fetchServicePlaceholders(addr, token, vault string) (map[string]string, error) {
+	url := fmt.Sprintf("%s/v1/vaults/%s/services", addr, vault)
+	// X-Vault is passed unconditionally: scoped sessions ignore it, and
+	// instance-level agent tokens (agent mode) need it on vault-scoped
+	// endpoints — see doVaultScopedRequestWithBody.
+	respBody, err := doVaultScopedRequestWithBody("GET", url, token, vault, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetching services for placeholder env: %w", err)
+	}
+	var resp struct {
+		Services []broker.Service `json:"services"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("parsing services for placeholder env: %w", err)
+	}
+	placeholders := map[string]string{}
+	for _, svc := range resp.Services {
+		if !svc.IsEnabled() {
+			// Disabled services aren't proxied, so their placeholders
+			// would reach upstream verbatim; don't inject them.
+			continue
+		}
+		for _, sub := range svc.Substitutions {
+			if sub.Env == "" {
+				continue
+			}
+			envName := sub.Env
+			if prev, exists := placeholders[envName]; exists && prev != sub.Placeholder {
+				fmt.Fprintf(os.Stderr, "%s service %q also injects %s with a different placeholder; the later one wins\n", warningText("Warning:"), svc.Name, envName)
+			}
+			placeholders[envName] = sub.Placeholder
+		}
+	}
+	return placeholders, nil
 }
 
 // resolveMITMHost extracts the host the child process should dial for

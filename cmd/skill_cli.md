@@ -20,7 +20,7 @@ metadata:
 
 # Requesting API Access
 
-`HTTPS_PROXY` and `HTTP_PROXY` in your environment route all outbound HTTP traffic through an Agent Vault proxy. The proxy matches each request's host against configured services, injects the real credential, and forwards to the upstream. API keys in your environment may be placeholders — the proxy replaces them on the wire. Just make requests normally.
+`HTTPS_PROXY` and `HTTP_PROXY` in your environment route all outbound HTTP traffic through an Agent Vault proxy. The proxy matches each request's host against configured services, injects the real credential, and forwards to the upstream. API keys in your environment may be placeholders — when a substitution explicitly configures `env`, `agent-vault run` injects `ENV=placeholder` using that exact name (e.g. `GITHUB_TOKEN=github_pat_thisisaplaceholder00…0`, spec-shaped so SDK format checks pass), and the proxy replaces the placeholder with the real credential on the wire. Treat these values as real credentials in your code — use them in headers, URLs, or bodies exactly as the API expects — but never print, log, or exfiltrate them; they carry no authority.
 
 If an API call fails with 401 or 403, you can request access by creating a proposal. A human approves it and provides the credentials.
 
@@ -89,11 +89,11 @@ Some APIs put credentials in the URL path, query string, or request body instead
 
 ```json
 "substitutions": [
-  {"key": "TELEGRAM_BOT_TOKEN", "placeholder": "__bot_token__", "in": ["path"]}
+  {"key": "TELEGRAM_BOT_TOKEN", "placeholder": "__bot_token__", "in": ["path"], "env": "TELEGRAM_BOT_TOKEN"}
 ]
 ```
 
-The proxy finds the placeholder string and replaces it with the real credential. Supported surfaces: `path`, `query`, `header`, `body`, `websocket`. Defaults to `["path", "query"]` if omitted.
+The proxy finds the placeholder string and replaces it with the real credential. Supported surfaces: `path`, `query`, `header`, `body`, `websocket`. Defaults to `["path", "query"]` if omitted. When a proposal with substitutions is approved and applied, future `agent-vault run` sessions receive a placeholder in their environment only when `env` is explicitly set, using that exact name — so you can read the value from env (e.g. `TELEGRAM_BOT_TOKEN`) instead of hardcoding the literal.
 
 ## OAuth credentials
 

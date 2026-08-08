@@ -511,6 +511,7 @@ function ServiceModal({
           key: s.key,
           placeholder: s.placeholder,
           in: s.in && s.in.length > 0 ? [...s.in] : [...DEFAULT_SUBSTITUTION_SURFACES],
+          env: s.env ?? "",
         }))
       : []
   );
@@ -564,6 +565,7 @@ function ServiceModal({
           key: s.key,
           placeholder: s.placeholder,
           in: s.in && s.in.length > 0 ? [...s.in] : [...DEFAULT_SUBSTITUTION_SURFACES],
+          env: s.env ?? "",
         }))
       );
       setSubsExpanded(true);
@@ -634,6 +636,7 @@ function ServiceModal({
       key: s.key.trim(),
       placeholder: s.placeholder.trim(),
       in: s.in && s.in.length > 0 ? s.in : DEFAULT_SUBSTITUTION_SURFACES,
+      ...(s.env && s.env.trim() !== "" ? { env: s.env.trim() } : {}),
     }))
     .filter((s) => s.key !== "" || s.placeholder !== "");
   const subsValid = cleanedSubs.every((s) => s.key !== "" && s.placeholder !== "");
@@ -962,6 +965,17 @@ function ServiceModal({
                       )
                     }
                   />
+                  <span>inject as</span>
+                  <InlineInput
+                    widthClass="w-44"
+                    placeholder={sub.key || "ENV_NAME (optional)"}
+                    value={sub.env ?? ""}
+                    onChange={(value) =>
+                      setSubs((prev) =>
+                        prev.map((s, j) => (j === i ? { ...s, env: value } : s))
+                      )
+                    }
+                  />
                 </div>
                 <IconButton
                   onClick={() => setSubs((prev) => prev.filter((_, j) => j !== i))}
@@ -973,7 +987,7 @@ function ServiceModal({
               onClick={() =>
                 setSubs((prev) => [
                   ...prev,
-                  { _id: nextRowId(), key: "", placeholder: "", in: [...DEFAULT_SUBSTITUTION_SURFACES] },
+                  { _id: nextRowId(), key: "", placeholder: "", in: [...DEFAULT_SUBSTITUTION_SURFACES], env: "" },
                 ])
               }
               className="text-sm font-medium text-primary hover:text-primary-hover transition-colors"

@@ -3,6 +3,7 @@ package broker
 import (
 	"encoding/base64"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -954,6 +955,81 @@ func TestValidateSubstitutionsRejectsUnknownSurface(t *testing.T) {
 	}}
 	if err := s.ValidateSubstitutions(); err == nil {
 		t.Fatal("expected error for unknown surface")
+	}
+}
+
+func TestValidateSubstitutionsMarkerExemption(t *testing.T) {
+	// Credential-shaped placeholders carry no "__" or non-word delimiter
+	// but are self-documenting via the "placeholder" marker, so the
+	// boundary rule is waived for them.
+	cases := []struct {
+		name string
+		sub  Substitution
+	}{
+		{"github pat shape", Substitution{Key: "GITHUB_TOKEN", Placeholder: GeneratePlaceholder("github_pat_", "GITHUB_TOKEN", 93), In: []string{"header"}}},
+		{"marker unpadded", Substitution{Key: "OPENAI_API_KEY", Placeholder: "sk-thisisaplaceholder", In: []string{"header"}}},
+		{"marker case-insensitive", Substitution{Key: "K_X", Placeholder: "vendorIsPlaceholderValue", In: []string{"path"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Service{Host: "api.example.com", Auth: Auth{Type: "passthrough"}, Substitutions: []Substitution{tc.sub}}
+			if err := s.ValidateSubstitutions(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestGeneratePlaceholder(t *testing.T) {
+	if got := GeneratePlaceholder("", "GITHUB_TOKEN", 0); got != "__GITHUB_TOKEN__" {
+		t.Fatalf("empty prefix should fall back to __KEY__ convention, got %q", got)
+	}
+
+	padded := GeneratePlaceholder("github_pat_", "GITHUB_TOKEN", 93)
+	if len(padded) != 93 {
+		t.Fatalf("expected 93-char GitHub PAT shape, got %d: %q", len(padded), padded)
+	}
+	if !strings.HasPrefix(padded, "github_pat_"+PlaceholderMarker) {
+		t.Fatalf("expected prefix+marker, got %q", padded)
+	}
+	if !regexp.MustCompile(`^github_pat_\w{82}$`).MatchString(padded) {
+		t.Fatalf("padded placeholder must satisfy the real GitHub PAT format: %q", padded)
+	}
+
+	unpadded := GeneratePlaceholder("sk-", "OPENAI_API_KEY", 0)
+	if unpadded != "sk-"+PlaceholderMarker {
+		t.Fatalf("targetLen 0 means no padding, got %q", unpadded)
+	}
+
+	// targetLen shorter than the base shape must not truncate.
+	short := GeneratePlaceholder("github_pat_", "GITHUB_TOKEN", 10)
+	if short != "github_pat_"+PlaceholderMarker {
+		t.Fatalf("short targetLen should return base unpadded, got %q", short)
+	}
+}
+
+func TestValidateSubstitutionsExplicitEnv(t *testing.T) {
+	valid := []string{"GITHUB_TOKEN", "lowercase_ok", "_leading_underscore", "MixedCase9"}
+	for _, env := range valid {
+		t.Run("valid/"+env, func(t *testing.T) {
+			s := Service{Host: "api.example.com", Auth: Auth{Type: "passthrough"}, Substitutions: []Substitution{
+				{Key: "K_X", Placeholder: "__sid__", Env: env, In: []string{"path"}},
+			}}
+			if err := s.ValidateSubstitutions(); err != nil {
+				t.Fatalf("unexpected error for env %q: %v", env, err)
+			}
+		})
+	}
+	invalid := []string{"9STARTS_WITH_DIGIT", "HAS-DASH", "HAS SPACE", "HAS.DOT"}
+	for _, env := range invalid {
+		t.Run("invalid/"+env, func(t *testing.T) {
+			s := Service{Host: "api.example.com", Auth: Auth{Type: "passthrough"}, Substitutions: []Substitution{
+				{Key: "K_X", Placeholder: "__sid__", Env: env, In: []string{"path"}},
+			}}
+			if err := s.ValidateSubstitutions(); err == nil {
+				t.Fatalf("expected error for env %q", env)
+			}
+		})
 	}
 }
 

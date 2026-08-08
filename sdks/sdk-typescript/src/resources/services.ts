@@ -74,6 +74,12 @@ export interface Substitution {
   placeholder: string;
   /** Surfaces to scan. Defaults server-side to ["path", "query"] when omitted. */
   in?: SubstitutionSurface[];
+  /**
+   * Env var name `agent-vault run` injects this placeholder under.
+   * Defaults to `key` when omitted — set it when the credential's vault
+   * name differs from the variable the agent's SDK reads.
+   */
+  env?: string;
 }
 
 // ---------------------------------------------------------------------------

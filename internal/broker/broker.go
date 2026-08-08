@@ -66,7 +66,15 @@ type Substitution struct {
 	Key         string   `yaml:"key" json:"key"`
 	Placeholder string   `yaml:"placeholder" json:"placeholder"`
 	In          []string `yaml:"in,omitempty" json:"in,omitempty"`
+	// Env is the environment variable name `agent-vault run` injects this
+	// placeholder under. Empty disables environment injection.
+	Env string `yaml:"env,omitempty" json:"env,omitempty"`
 }
+
+// EnvVarPattern validates configured env names: any valid shell identifier.
+// POSIX env names are case-sensitive, so unlike credential keys this is not
+// restricted to UPPER_SNAKE_CASE.
+var EnvVarPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // IsEnabled reports whether the service should serve proxy traffic. A
 // nil Enabled field (missing from the stored JSON) is treated as enabled
@@ -398,6 +406,9 @@ func (s *Service) ValidateSubstitutions() error {
 		if err := validateCredentialKey("key", sub.Key); err != nil {
 			return fmt.Errorf("substitution %d: %w", i, err)
 		}
+		if sub.Env != "" && !EnvVarPattern.MatchString(sub.Env) {
+			return fmt.Errorf("substitution %d: \"env\" %q is not a valid environment variable name (must match [A-Za-z_][A-Za-z0-9_]*)", i, sub.Env)
+		}
 		if err := validatePlaceholder(sub.Placeholder); err != nil {
 			return fmt.Errorf("substitution %d: %w", i, err)
 		}
@@ -412,11 +423,48 @@ func (s *Service) ValidateSubstitutions() error {
 	return nil
 }
 
+// PlaceholderMarker is the self-documenting marker embedded in generated
+// credential-shaped placeholders. Human eyeballs read it as fake
+// instantly, while the surrounding shape (vendor prefix + zero padding)
+// matches the real credential's length and charset so static format
+// checks pass. See GeneratePlaceholder.
+const PlaceholderMarker = "thisisaplaceholder"
+
+// placeholderExemptionSubstr exempts a placeholder from the boundary
+// rule in validatePlaceholder: any value containing "placeholder"
+// (case-insensitive) is self-documenting, and credential-shaped values
+// like "github_pat_thisisaplaceholder00…0" carry vendor prefixes that
+// never appear as legitimate URL words — the collision risk the
+// boundary rule guards against does not apply to them.
+const placeholderExemptionSubstr = "placeholder"
+
+// GeneratePlaceholder builds a credential-shaped placeholder for key.
+// With an empty prefix it falls back to the "__KEY__" convention.
+// Otherwise the result is prefix+PlaceholderMarker, zero-padded to
+// targetLen so it matches the real credential's length spec (e.g. 93
+// chars for a GitHub PAT); targetLen <= len(base) means no padding.
+// Zeros keep every mainstream credential charset (\w, base64, hex)
+// valid and read as an obvious dummy. targetLen/prefix come from the
+// catalog's PlaceholderPrefix/PlaceholderLength template fields, but
+// callers may supply any values — the field stays operator-defined.
+func GeneratePlaceholder(prefix, key string, targetLen int) string {
+	if prefix == "" {
+		return "__" + key + "__"
+	}
+	base := prefix + PlaceholderMarker
+	if targetLen <= len(base) {
+		return base
+	}
+	return base + strings.Repeat("0", targetLen-len(base))
+}
+
 // validatePlaceholder enforces length, character set, a boundary
 // requirement (either "__" or a non-word character) so bare identifiers
 // like "account_sid" — which legitimately appear as URL path segments —
 // cannot be picked as placeholders, and at least one alphanumeric so
-// all-symbol strings like "____" or "~~~~" are rejected.
+// all-symbol strings like "____" or "~~~~" are rejected. Values
+// containing "placeholder" are exempt from the boundary requirement
+// (see placeholderExemptionSubstr).
 func validatePlaceholder(p string) error {
 	if p == "" {
 		return fmt.Errorf("\"placeholder\" is required (recommended convention: __name__)")
@@ -443,8 +491,8 @@ func validatePlaceholder(p string) error {
 	if !hasAlnum {
 		return fmt.Errorf("placeholder %q must contain at least one alphanumeric character (recommended convention: __name__)", p)
 	}
-	if !hasBoundary {
-		return fmt.Errorf("placeholder %q must contain a delimiter — either \"__\" or a character outside [A-Za-z0-9_] — to avoid matching legitimate URL words (recommended convention: __name__)", p)
+	if !hasBoundary && !strings.Contains(strings.ToLower(p), placeholderExemptionSubstr) {
+		return fmt.Errorf("placeholder %q must contain a delimiter — either \"__\" or a character outside [A-Za-z0-9_] — to avoid matching legitimate URL words (recommended conventions: __name__, or a credential-shaped value containing %q such as github_pat_%s00…0)", p, placeholderExemptionSubstr, PlaceholderMarker)
 	}
 	return nil
 }

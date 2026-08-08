@@ -199,6 +199,14 @@ func runContainer(cmd *cobra.Command, args []string, scopedToken, addr, vault st
 
 	env := isolation.BuildContainerEnv(scopedToken, vault, fwd.HTTPPort, fwd.MITMPort)
 
+	// Placeholder delivery for substitution services, same as host mode.
+	// The container env is built fresh rather than inherited, so there is
+	// nothing to scrub — augmentEnvWithPlaceholders only appends.
+	env, err = augmentEnvWithPlaceholders(env, addr, scopedToken, vault)
+	if err != nil {
+		return err
+	}
+
 	mounts, _ := cmd.Flags().GetStringArray("mount")
 	keep, _ := cmd.Flags().GetBool("keep")
 	noFirewall, _ := cmd.Flags().GetBool("no-firewall")

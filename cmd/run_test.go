@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -421,5 +422,146 @@ func TestRunCmdAgentMode_RejectsTTL(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--ttl has no effect") {
 		t.Errorf("error should mention --ttl rejection; got: %v", err)
+	}
+}
+
+// fakeServicesServer serves GET /v1/vaults/{name}/services with the
+// given services JSON, mimicking the real handler's envelope.
+func fakeServicesServer(t *testing.T, servicesJSON string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/v1/vaults/") || !strings.HasSuffix(r.URL.Path, "/services") {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"vault":"default","services":%s}`, servicesJSON)
+	}))
+}
+
+func TestFetchServicePlaceholders(t *testing.T) {
+	srv := fakeServicesServer(t, `[
+		{"name":"github","host":"api.github.com","auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"GITHUB_TOKEN","placeholder":"github_pat_thisisaplaceholder","env":"GITHUB_TOKEN","in":["header"]}]},
+		{"name":"disabled-svc","host":"example.com","enabled":false,"auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"SHOULD_NOT_APPEAR","placeholder":"__nope__"}]},
+		{"name":"no-subs","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_SECRET_KEY"}}
+	]`)
+	defer srv.Close()
+
+	got, err := fetchServicePlaceholders(srv.URL, "av_sess_abc", "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 placeholder, got %v", got)
+	}
+	if got["GITHUB_TOKEN"] != "github_pat_thisisaplaceholder" {
+		t.Errorf("GITHUB_TOKEN = %q, want github_pat_thisisaplaceholder", got["GITHUB_TOKEN"])
+	}
+}
+
+func TestFetchServicePlaceholders_ConflictLaterWins(t *testing.T) {
+	srv := fakeServicesServer(t, `[
+		{"name":"svc-a","host":"a.example.com","auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"FIRST_KEY","placeholder":"__first__","env":"SHARED_KEY"}]},
+		{"name":"svc-b","host":"b.example.com","auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"SECOND_KEY","placeholder":"__second__","env":"SHARED_KEY"}]}
+	]`)
+	defer srv.Close()
+
+	got, err := fetchServicePlaceholders(srv.URL, "av_sess_abc", "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got["SHARED_KEY"] != "__second__" {
+		t.Errorf("SHARED_KEY = %q, want __second__ (later service wins)", got["SHARED_KEY"])
+	}
+}
+
+func TestFetchServicePlaceholders_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := fetchServicePlaceholders(srv.URL, "av_sess_abc", "default"); err == nil {
+		t.Fatal("expected error on server 500")
+	}
+}
+
+func TestAugmentEnvWithPlaceholders_ScrubsParentEnv(t *testing.T) {
+	srv := fakeServicesServer(t, `[
+		{"name":"github","host":"api.github.com","auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"GITHUB_TOKEN","placeholder":"github_pat_thisisaplaceholder","env":"GITHUB_TOKEN","in":["header"]}]}
+	]`)
+	defer srv.Close()
+
+	parent := []string{"GITHUB_TOKEN=real_leak", "UNRELATED=keepme"}
+	env, err := augmentEnvWithPlaceholders(parent, srv.URL, "av_sess_abc", "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	vars := envMap(env)
+	if vars["GITHUB_TOKEN"] != "github_pat_thisisaplaceholder" {
+		t.Errorf("GITHUB_TOKEN = %q, want the placeholder (parent real value must be scrubbed)", vars["GITHUB_TOKEN"])
+	}
+	if vars["UNRELATED"] != "keepme" {
+		t.Errorf("UNRELATED = %q, want keepme (unrelated env must survive)", vars["UNRELATED"])
+	}
+}
+
+func TestAugmentEnvWithPlaceholders_NoSubstitutions(t *testing.T) {
+	srv := fakeServicesServer(t, `[]`)
+	defer srv.Close()
+
+	parent := []string{"GITHUB_TOKEN=real_value_stays"}
+	env, err := augmentEnvWithPlaceholders(parent, srv.URL, "av_sess_abc", "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(env) != 1 || env[0] != "GITHUB_TOKEN=real_value_stays" {
+		t.Errorf("env should be unchanged when no substitutions exist, got %v", env)
+	}
+}
+
+func TestAugmentEnvWithPlaceholders_NoEnvConfig(t *testing.T) {
+	srv := fakeServicesServer(t, `[
+		{"name":"github","host":"api.github.com","auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"GITHUB_TOKEN","placeholder":"github_pat_thisisaplaceholder","in":["header"]}]}
+	]`)
+	defer srv.Close()
+
+	want := []string{"GITHUB_TOKEN=parent_value", "UNRELATED=keepme"}
+	env, err := augmentEnvWithPlaceholders(slices.Clone(want), srv.URL, "av_sess_abc", "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !slices.Equal(env, want) {
+		t.Errorf("env should be unchanged when substitutions do not configure env injection, got %v", env)
+	}
+}
+
+func TestAugmentEnvWithPlaceholders_ExplicitEnv(t *testing.T) {
+	srv := fakeServicesServer(t, `[
+		{"name":"github","host":"api.github.com","auth":{"type":"passthrough"},
+		 "substitutions":[{"key":"ACME_GH_TOKEN","placeholder":"github_pat_thisisaplaceholder","env":"GITHUB_TOKEN","in":["header"]}]}
+	]`)
+	defer srv.Close()
+
+	// The parent env holds real values under BOTH names; only the configured
+	// name is scrubbed and injected. The credential key itself is not an
+	// env var, so ACME_GH_TOKEN passes through untouched.
+	parent := []string{"GITHUB_TOKEN=real_leak", "ACME_GH_TOKEN=also_stays"}
+	env, err := augmentEnvWithPlaceholders(parent, srv.URL, "av_sess_abc", "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	vars := envMap(env)
+	if vars["GITHUB_TOKEN"] != "github_pat_thisisaplaceholder" {
+		t.Errorf("GITHUB_TOKEN = %q, want the placeholder injected under the configured env name", vars["GITHUB_TOKEN"])
+	}
+	if vars["ACME_GH_TOKEN"] != "also_stays" {
+		t.Errorf("ACME_GH_TOKEN = %q, want also_stays (credential key is not used for env injection)", vars["ACME_GH_TOKEN"])
 	}
 }

@@ -15,6 +15,7 @@ export interface Substitution {
   key: string;
   placeholder: string;
   in?: string[];
+  env?: string;
 }
 
 export const SUBSTITUTION_SURFACES = ["path", "query", "header", "body", "websocket"] as const;
@@ -144,6 +145,7 @@ function SubstitutionsDisplay({ subs }: { subs: Substitution[] }) {
             <span className="text-text-muted">→</span>
             <span className="text-text break-all">{sub.key}</span>
             <span className="text-text-muted">in: [{surfaces.join(", ")}]</span>
+            {sub.env && <span className="text-text-muted">env: {sub.env}</span>}
           </div>
         );
       })}

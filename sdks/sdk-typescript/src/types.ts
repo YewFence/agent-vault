@@ -100,6 +100,7 @@ export interface WireSubstitution {
   key: string;
   placeholder: string;
   in?: string[];
+  env?: string;
 }
 
 /** @internal Wire format for a service entry. */
