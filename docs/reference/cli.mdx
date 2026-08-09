@@ -366,7 +366,7 @@ description: "Complete reference for all Agent Vault CLI commands."
 
     The child process receives `AGENT_VAULT_ADDR`, `AGENT_VAULT_TOKEN`, and `AGENT_VAULT_VAULT`, plus `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` / `NODE_USE_ENV_PROXY` / `OPENCLAW_PROXY_URL` and CA-trust variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `DENO_CERT`) pointing at `~/.agent-vault/mitm-ca.pem`, so standard HTTP and HTTPS clients transparently route through the broker. `OPENCLAW_PROXY_URL` feeds OpenClaw's Proxyline managed proxy (OpenClaw requires this plus `proxy.enabled: true` in its config). `HTTPS_PROXY` and `HTTP_PROXY` both point at the same plain HTTP proxy URL — the listener handles CONNECT for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams on the same port. If the server's MITM proxy is unreachable, `vault run` aborts.
 
-    **Placeholder env delivery.** For every substitution with an explicit `env` setting on the vault's enabled services, the child additionally receives an env var holding the placeholder (e.g. `GITHUB_TOKEN=github_pat_thisisaplaceholder00…0`) — a spec-shaped fake value that passes SDK/static format checks and that the broker rewrites to the real credential on the wire. Substitutions without `env` do not affect the child environment. Parent-environment values for configured names are scrubbed first so a real credential set outside the vault never leaks into the child. If two substitutions use the same env name, the later service wins and a warning is printed. Fetching the service list failing aborts the run. See [Credential-shaped placeholders](/learn/services#credential-shaped-placeholders-and-env-delivery).
+    **Placeholder env delivery.** For every substitution with an explicit `env` setting on the vault's enabled services, the child additionally receives an env var holding the placeholder (e.g. `GITHUB_TOKEN=github_pat_thisisaplaceholder00…0`) — a spec-shaped fake value that passes SDK/static format checks and that the broker rewrites to the real credential on the wire. Substitutions without `env` do not affect the child environment. Parent-environment values for configured names are scrubbed first so a real credential set outside the vault never leaks into the child. If enabled services assign different placeholders to the same env name, the run aborts because one environment variable cannot represent both values. Fetching the service list failing also aborts the run. See [Credential-shaped placeholders](/learn/services#credential-shaped-placeholders-and-env-delivery).
 
     **Agent mode (containerized / unattended deployments).** When `AGENT_VAULT_TOKEN` and `AGENT_VAULT_ADDR` are pre-set on the environment, `vault run` skips the admin-session login and uses the env-supplied token as the credential — `--ttl` is rejected in this mode since the token's lifetime is fixed at mint time. The token is validated against the broker once at startup so bad/expired tokens fail fast with a clear error rather than producing 401s on every proxied call. See [Deploy your agent in a container](/guides/deploy-agent-container).
 
@@ -382,6 +382,25 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `--home-volume-shared` | `false` | Share `/home/claude/.claude` across invocations via a persistent docker volume (`--isolation=container` only). Default is a per-invocation volume — auth doesn't persist but concurrent runs can't corrupt each other. |
     | `--share-agent-dir` | `false` | Bind-mount the host's agent state dir (`~/.claude`) at `/home/claude/.claude` so the container reuses your host login (`--isolation=container` only). On Linux the container's `claude` user is remapped to your host uid/gid so writes land owned by you. Mutually exclusive with `--home-volume-shared`. |
     | `--telemetry` | `true` | Enable or disable anonymous usage telemetry. Also respects the `AGENT_VAULT_TELEMETRY` env var; the env var takes precedence. |
+  </Accordion>
+
+  <Accordion title="agent-vault placeholders">
+    ```bash
+    agent-vault placeholders [flags]
+    ```
+
+    Print portable POSIX shell exports for placeholders whose enabled service substitutions explicitly configure `env`. The output is sorted by environment variable name and contains placeholder values only; warnings and errors go to stderr, so successful output is safe to evaluate in `sh`, Bash, or Zsh.
+
+    The shell must already have `AGENT_VAULT_TOKEN`, `AGENT_VAULT_ADDR`, `AGENT_VAULT_VAULT`, proxy routing, and CA trust configured. If enabled services assign different placeholders to the same environment variable, the command stops without emitting a script.
+
+    | Flag | Default | Description |
+    |------|---------|-------------|
+    | `--address` | | Server address override |
+    | `--vault` | | Target vault override |
+
+    ```bash
+    eval "$(agent-vault placeholders)"
+    ```
   </Accordion>
 
   <Accordion title="agent-vault vault token">

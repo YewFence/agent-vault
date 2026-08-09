@@ -461,24 +461,6 @@ func TestFetchServicePlaceholders(t *testing.T) {
 	}
 }
 
-func TestFetchServicePlaceholders_ConflictLaterWins(t *testing.T) {
-	srv := fakeServicesServer(t, `[
-		{"name":"svc-a","host":"a.example.com","auth":{"type":"passthrough"},
-		 "substitutions":[{"key":"FIRST_KEY","placeholder":"__first__","env":"SHARED_KEY"}]},
-		{"name":"svc-b","host":"b.example.com","auth":{"type":"passthrough"},
-		 "substitutions":[{"key":"SECOND_KEY","placeholder":"__second__","env":"SHARED_KEY"}]}
-	]`)
-	defer srv.Close()
-
-	got, err := fetchServicePlaceholders(srv.URL, "av_sess_abc", "default")
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if got["SHARED_KEY"] != "__second__" {
-		t.Errorf("SHARED_KEY = %q, want __second__ (later service wins)", got["SHARED_KEY"])
-	}
-}
-
 func TestFetchServicePlaceholders_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)

@@ -156,6 +156,22 @@ agent-vault vault run -- codex
 agent-vault vault run -- opencode
 ```
 
+For a customizable current-shell setup, copy the reference script and remove
+the CA trust variables your clients do not use:
+
+```bash
+cp examples/agent-vault-env.sh ./agent-vault-env.sh
+${EDITOR:-vi} ./agent-vault-env.sh
+. ./agent-vault-env.sh
+```
+
+The script is a minimal, editable setup rather than an exact copy of
+`agent-vault run`: it configures the token, proxy, and selected CA trust
+variables, then uses `agent-vault placeholders` to export the
+credential-shaped placeholders declared by enabled services. The placeholders
+are fake values; real credentials remain inside Agent Vault and are attached at
+the proxy.
+
 Alternatively, if your agent is running with Docker, you can install the Agent Vault CLI via a Dockerfile by copying the binary into your own image and using it to start up your agent process:
 
 ```dockerfile

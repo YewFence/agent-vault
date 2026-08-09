@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
-	"time"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,8 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
-	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/isolation"
 	"github.com/Infisical/agent-vault/internal/session"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -143,9 +142,7 @@ func runCmdRunE(cmd *cobra.Command, args []string) error {
 	//      so a bad token fails fast at startup instead of producing 401s
 	//      on every proxied call. In admin mode we mint a fresh
 	//      vault-scoped token (existing behavior).
-	var (
-		vault, token string
-	)
+	var vault, token string
 	if fromEnv {
 		// Hard-error on --ttl: the env-supplied token's lifetime is fixed
 		// at mint time, so silently ignoring would mislead users who
@@ -556,49 +553,6 @@ func augmentEnvWithPlaceholders(env []string, addr, token, vault string) ([]stri
 	return env, nil
 }
 
-// fetchServicePlaceholders returns env var name → placeholder for substitutions
-// with an explicit env setting on the vault's enabled services.
-// When two substitutions resolve to the same env name with different
-// placeholders the later one wins and a warning is printed — a single
-// env slot can't hold both. Identical duplicates are harmless
-// (per-service match scoping keeps the rewrite unambiguous) and pass
-// silently.
-func fetchServicePlaceholders(addr, token, vault string) (map[string]string, error) {
-	url := fmt.Sprintf("%s/v1/vaults/%s/services", addr, vault)
-	// X-Vault is passed unconditionally: scoped sessions ignore it, and
-	// instance-level agent tokens (agent mode) need it on vault-scoped
-	// endpoints — see doVaultScopedRequestWithBody.
-	respBody, err := doVaultScopedRequestWithBody("GET", url, token, vault, nil)
-	if err != nil {
-		return nil, fmt.Errorf("fetching services for placeholder env: %w", err)
-	}
-	var resp struct {
-		Services []broker.Service `json:"services"`
-	}
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("parsing services for placeholder env: %w", err)
-	}
-	placeholders := map[string]string{}
-	for _, svc := range resp.Services {
-		if !svc.IsEnabled() {
-			// Disabled services aren't proxied, so their placeholders
-			// would reach upstream verbatim; don't inject them.
-			continue
-		}
-		for _, sub := range svc.Substitutions {
-			if sub.Env == "" {
-				continue
-			}
-			envName := sub.Env
-			if prev, exists := placeholders[envName]; exists && prev != sub.Placeholder {
-				fmt.Fprintf(os.Stderr, "%s service %q also injects %s with a different placeholder; the later one wins\n", warningText("Warning:"), svc.Name, envName)
-			}
-			placeholders[envName] = sub.Placeholder
-		}
-	}
-	return placeholders, nil
-}
-
 // resolveMITMHost extracts the host the child process should dial for
 // the MITM proxy from the configured server address. Falls back to
 // loopback when addr is unparseable or has no host.
@@ -668,7 +622,6 @@ func augmentEnvWithMITM(env []string, addr, token, vault, caPath string) ([]stri
 	if err := os.WriteFile(caPath, pem, 0o600); err != nil { //nolint:gosec
 		return env, 0, false, fmt.Errorf("write CA: %w", err)
 	}
-
 
 	env = stripEnvKeys(env, mitmInjectedKeys)
 	env = append(env, isolation.BuildProxyEnv(isolation.ProxyEnvParams{

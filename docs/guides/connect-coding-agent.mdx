@@ -38,7 +38,27 @@ agent-vault vault run --vault my-vault -- claude
 `vault run` is a convenience wrapper, not a sandbox. A child process can unset `HTTPS_PROXY`/`HTTP_PROXY` or bypass the injected CA and reach the network directly — local credentials and network access are still fully available to the agent. Stronger isolation for local development is on the roadmap.
 </Note>
 
-## Option 2: Create a named agent
+## Option 2: Customize the current shell
+
+If every command launched from the current shell should use Agent Vault, start from the editable reference script:
+
+```bash
+cp examples/agent-vault-env.sh ./agent-vault-env.sh
+${EDITOR:-vi} ./agent-vault-env.sh
+. ./agent-vault-env.sh
+```
+
+The script is a minimal, editable setup rather than an exact copy of `vault run`. It obtains or reuses an Agent Vault token, downloads the root CA, configures the HTTP proxy, and exports a conservative set of CA trust variables. Copy it before use and remove or add client-specific variables such as `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, or `OPENCLAW_PROXY_URL`. Set `AGENT_VAULT_ADDR`, `AGENT_VAULT_VAULT`, `AGENT_VAULT_MITM_ADDR`, or `AGENT_VAULT_CA_FILE` before sourcing it to override the local defaults. If the server uses a non-default `--mitm-port`, set `AGENT_VAULT_MITM_ADDR` to the matching address before sourcing the script.
+
+At the end, the script evaluates `agent-vault placeholders`. That command reads enabled service substitutions and emits portable, shell-safe exports for substitutions with an explicit `env` name; it never emits real credentials. You can also use it directly after configuring the Agent Vault environment:
+
+```bash
+eval "$(agent-vault placeholders)"
+```
+
+Because every child of the customized shell inherits these variables, use `vault run` when only one process should receive Agent Vault access. Exit the shell to discard its exported environment.
+
+## Option 3: Create a named agent
 
 For agents you can't wrap with `vault run` (e.g. cloud-hosted agents, or when you want to connect an agent on a different host).
 
