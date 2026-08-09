@@ -46,6 +46,7 @@ var catalogCmd = &cobra.Command{
 				Name                   string `json:"name"`
 				Host                   string `json:"host"`
 				Description            string `json:"description"`
+				Category               string `json:"category"`
 				AuthType               string `json:"auth_type"`
 				SuggestedCredentialKey string `json:"suggested_credential_key"`
 				Substitutions          []struct {
@@ -64,14 +65,14 @@ var catalogCmd = &cobra.Command{
 		}
 
 		t := newTable(w)
-		t.AppendHeader(table.Row{"ID", "NAME", "HOST", "AUTH TYPE", "SUGGESTED KEY"})
+		t.AppendHeader(table.Row{"ID", "NAME", "CATEGORY", "HOST", "AUTH TYPE", "SUGGESTED KEY"})
 		for _, svc := range data.Services {
 			// "passthrough" alone reads as "no credential involved".
 			authType := svc.AuthType
 			if len(svc.Substitutions) > 0 {
 				authType += " + substitution"
 			}
-			t.AppendRow(table.Row{svc.ID, svc.Name, svc.Host, authType, svc.SuggestedCredentialKey})
+			t.AppendRow(table.Row{svc.ID, svc.Name, svc.Category, svc.Host, authType, svc.SuggestedCredentialKey})
 		}
 		t.Render()
 		return nil

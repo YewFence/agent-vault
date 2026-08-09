@@ -11,6 +11,12 @@ interface SheetProps {
   footer?: ReactNode;
   /** Tailwind max-width class. Defaults to `max-w-[520px]`. */
   widthClass?: string;
+  /**
+   * Full replacement for the body container's classes. Defaults to a
+   * padded scroll area; pass e.g. "flex-1 overflow-hidden flex flex-col"
+   * when the child manages its own columns/scroll regions.
+   */
+  bodyClassName?: string;
 }
 
 export default function Sheet({
@@ -22,6 +28,7 @@ export default function Sheet({
   children,
   footer,
   widthClass = "max-w-[520px]",
+  bodyClassName,
 }: SheetProps) {
   useEffect(() => {
     if (!open) return;
@@ -85,7 +92,7 @@ export default function Sheet({
           {headerExtra && <div className="mt-4">{headerExtra}</div>}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+        <div className={bodyClassName ?? "flex-1 overflow-y-auto px-6 py-5"}>{children}</div>
 
         {footer && (
           <div className="px-6 py-4 border-t border-border flex items-center justify-end gap-3">

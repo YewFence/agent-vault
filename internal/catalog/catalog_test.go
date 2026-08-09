@@ -3,6 +3,7 @@ package catalog
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/Infisical/agent-vault/internal/broker"
@@ -51,6 +52,22 @@ func TestCatalogTemplatesAreValidServices(t *testing.T) {
 				t.Fatalf("duplicate template id %q", tpl.ID)
 			}
 			seen[tpl.ID] = true
+
+			validCategory := false
+			for _, c := range Categories {
+				if tpl.Category == c {
+					validCategory = true
+					break
+				}
+			}
+			if !validCategory {
+				t.Errorf("category %q is not one of the declared Categories", tpl.Category)
+			}
+			for _, a := range tpl.Aliases {
+				if a == "" || a != strings.ToLower(a) {
+					t.Errorf("alias %q must be non-empty and lowercase", a)
+				}
+			}
 
 			if !broker.CredentialKeyPattern.MatchString(tpl.SuggestedCredentialKey) {
 				t.Errorf("suggested_credential_key %q must be UPPER_SNAKE_CASE", tpl.SuggestedCredentialKey)

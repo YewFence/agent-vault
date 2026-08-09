@@ -48,15 +48,12 @@ Open the `claude-code` vault and go to the **[Credentials](/learn/credentials)**
 
 A [service](/learn/services) tells Agent Vault which upstream host the agent can reach and how to wire the credential in. For this tutorial we'll use the **passthrough + substitution** pattern: Agent Vault doesn't pick an auth header for you, it just swaps a placeholder string the agent sends for the real credential.
 
-In the same vault, go to the **Services** tab, click **Add service**, and enter:
+In the same vault, go to the **Services** tab, click **Add service**, and pick **Custom** from the template gallery (we're configuring this one by hand to learn the pattern). Then walk through the setup steps:
 
-- **Name**: `github`
-- **Host**: `api.github.com`
-- **Auth type**: `passthrough`
-- **Substitution**:
-  - **Key**: `GITHUB_TOKEN`
-  - **Placeholder**: `__github_token__`
-  - **In**: `header`
+- **Details**: **Name** `github`, **Host** `api.github.com`
+- **Authentication**: **Auth type** `passthrough`
+- **Substitutions**: add one with **Key** `GITHUB_TOKEN`, **Placeholder** `__github_token__`, **In** `header`
+- **Review**: confirm the summary and save.
 
 ![Add Service form with passthrough auth and GITHUB_TOKEN header substitution](/images/tutorial/tutorial-define-service.png)
 

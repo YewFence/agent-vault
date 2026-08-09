@@ -17,13 +17,18 @@ interface ComboboxProps {
   /** Called when an option is explicitly picked from the list. */
   onSelect: (id: string) => void;
   placeholder?: string;
+  /** Danger border for invalid input. */
+  error?: boolean;
+  /** Tighter padding for sentence-style inline rows. */
+  compact?: boolean;
+  autoFocus?: boolean;
 }
 
 /**
  * A text input with a suggestion popover. Typing filters the options;
  * text that matches nothing behaves exactly like a plain Input.
  */
-export default function Combobox({ value, onChange, options, onSelect, placeholder }: ComboboxProps) {
+export default function Combobox({ value, onChange, options, onSelect, placeholder, error, compact, autoFocus }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const [typing, setTyping] = useState(false);
@@ -103,7 +108,8 @@ export default function Combobox({ value, onChange, options, onSelect, placehold
         role="combobox"
         aria-expanded={open && filtered.length > 0}
         autoComplete="off"
-        className="w-full px-4 py-3 pr-10 bg-surface-raised border border-border rounded-lg text-text text-sm outline-none transition-colors focus:border-border-focus focus:shadow-[0_0_0_3px_var(--color-primary-ring)]"
+        autoFocus={autoFocus}
+        className={`w-full ${compact ? "px-3 py-1.5 pr-8 font-mono" : "px-4 py-3 pr-10"} bg-surface-raised border rounded-lg text-text text-sm outline-none transition-colors focus:border-border-focus focus:shadow-[0_0_0_3px_var(--color-primary-ring)] ${error ? "border-danger" : "border-border"}`}
       />
       <button
         type="button"
