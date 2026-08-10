@@ -16,7 +16,7 @@ For agents that don't have a chat interface or need raw environment variables, s
 
 ## Option 1: Wrap with `agent-vault vault run`
 
-The simplest approach for local development. Wraps your agent process with the environment variables it needs — no token to manage. `vault run` also pre-configures `HTTPS_PROXY`, `HTTP_PROXY`, and the CA trust chain on the child, so the agent calls upstream URLs directly (over either `http://` or `https://`) and Agent Vault transparently injects credentials.
+The simplest approach for local development. Before the first host-mode run, install the Agent Vault CA into the native trust store by saving, reviewing, and manually running `agent-vault ca install-script`. `vault run` then configures `HTTPS_PROXY`, `HTTP_PROXY`, and native CA trust on the child, so the agent calls upstream URLs directly (over either `http://` or `https://`) and Agent Vault transparently injects credentials.
 
 ```bash
 agent-vault vault run -- claude    # Claude Code
@@ -48,7 +48,19 @@ ${EDITOR:-vi} ./agent-vault-env.sh
 . ./agent-vault-env.sh
 ```
 
-The script is a minimal, editable setup rather than an exact copy of `vault run`. It obtains or reuses an Agent Vault token, downloads the root CA, configures the HTTP proxy, and exports a conservative set of CA trust variables. Copy it before use and remove or add client-specific variables such as `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, or `OPENCLAW_PROXY_URL`. Set `AGENT_VAULT_ADDR`, `AGENT_VAULT_VAULT`, `AGENT_VAULT_MITM_ADDR`, or `AGENT_VAULT_CA_FILE` before sourcing it to override the local defaults. If the server uses a non-default `--mitm-port`, set `AGENT_VAULT_MITM_ADDR` to the matching address before sourcing the script.
+The script is a minimal, editable setup rather than an exact copy of `vault run`. It follows one system-first path: obtain or reuse a token, fetch the current CA, verify that p11-kit or macOS Keychain trusts it, configure both proxy-variable casings, clear replacement-style CA variables, enable `UV_SYSTEM_CERTS=true`, and load credential-shaped placeholders. Set `AGENT_VAULT_ADDR`, `AGENT_VAULT_VAULT`, `AGENT_VAULT_MITM_ADDR`, `AGENT_VAULT_CA_FILE`, or `AGENT_VAULT_NO_PROXY` before sourcing it to override defaults. A remote control-plane hostname must be included in `AGENT_VAULT_NO_PROXY`.
+
+To supply a file trust store manually, always merge the existing system bundle and Agent Vault CA; never point replacement variables at the Agent Vault CA alone:
+
+```bash
+system_ca=${AGENT_VAULT_SYSTEM_CA_FILE:?set a system CA bundle path}
+bundle=$HOME/.agent-vault/mitm-ca-bundle.pem
+umask 077
+cat "$system_ca" "$HOME/.agent-vault/mitm-ca.pem" > "$bundle.tmp"
+mv "$bundle.tmp" "$bundle"
+```
+
+The reference script does not generate this fallback bundle; copy and adapt the snippet only for a client that cannot use native system trust. For curl failures, inspect `curl -v`, both proxy-variable casings, `NO_PROXY`/`no_proxy`, `CURL_CA_BUNDLE`, and `SSL_CERT_FILE`. uv uses `UV_SYSTEM_CERTS=true` in the reference system setup. Host mode is cooperative: a child can ignore or unset these variables. Use container isolation when traffic enforcement is required.
 
 At the end, the script evaluates `agent-vault placeholders`. That command reads enabled service substitutions and emits portable, shell-safe exports for substitutions with an explicit `env` name; it never emits real credentials. You can also use it directly after configuring the Agent Vault environment:
 

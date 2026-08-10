@@ -503,7 +503,7 @@ The installer writes `/etc/systemd/system/hermes-gateway.service` and enables it
 
 ## 8. Start the gateway daemon
 
-The unit needs Agent Vault's environment wired explicitly, since systemd doesn't inherit it from your shell.
+The unit needs Agent Vault's environment wired explicitly, since systemd doesn't inherit it from your shell. Before creating the unit, generate the current CA installation script with `agent-vault ca install-script --address http://10.0.0.2:14321 > agent-vault-ca-install.sh`, review it, and run its Linux `install` action so the gateway can use native system trust.
 
 <Steps>
 
@@ -521,12 +521,8 @@ AGENT_VAULT_TOKEN=$AGENT_VAULT_TOKEN
 AGENT_VAULT_VAULT=prod
 HTTPS_PROXY=http://$AGENT_VAULT_TOKEN@10.0.0.2:14322
 HTTP_PROXY=http://$AGENT_VAULT_TOKEN@10.0.0.2:14322
-REQUESTS_CA_BUNDLE=/root/.agent-vault/mitm-ca.pem
-SSL_CERT_FILE=/root/.agent-vault/mitm-ca.pem
 NODE_EXTRA_CA_CERTS=/root/.agent-vault/mitm-ca.pem
-CURL_CA_BUNDLE=/root/.agent-vault/mitm-ca.pem
-GIT_SSL_CAINFO=/root/.agent-vault/mitm-ca.pem
-DENO_CERT=/root/.agent-vault/mitm-ca.pem
+UV_SYSTEM_CERTS=true
 NODE_USE_ENV_PROXY=1
 EOF
   chmod 600 /root/.hermes/gateway.env

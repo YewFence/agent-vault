@@ -1,0 +1,97 @@
+#!/bin/sh
+set -eu
+
+expected_sha256='{{CA_SHA256}}'
+ca_file="$(mktemp "${TMPDIR:-/tmp}/agent-vault-ca.XXXXXX")"
+anchors_file="$(mktemp "${TMPDIR:-/tmp}/agent-vault-anchors.XXXXXX")"
+cleanup() {
+	rm -f "$ca_file" "$anchors_file"
+}
+trap cleanup EXIT HUP INT TERM
+
+cat >"$ca_file" <<'AGENT_VAULT_CA_PEM'
+{{CA_PEM}}
+AGENT_VAULT_CA_PEM
+chmod 600 "$ca_file"
+
+require_command() {
+	if ! command -v "$1" >/dev/null 2>&1; then
+		echo "agent-vault: required command not found: $1" >&2
+		exit 1
+	fi
+}
+
+certificate_sha256() {
+	openssl x509 -in "$1" -noout -fingerprint -sha256 |
+		sed 's/^.*=//; s/://g' |
+		tr '[:lower:]' '[:upper:]'
+}
+
+verify_embedded_certificate() {
+	actual_sha256="$(certificate_sha256 "$ca_file")"
+	if [ "$actual_sha256" != "$expected_sha256" ]; then
+		echo "agent-vault: embedded CA fingerprint mismatch" >&2
+		exit 1
+	fi
+}
+
+verify_system_trust() {
+	if ! is_system_trusted; then
+		echo "agent-vault: CA $expected_sha256 is not trusted by the p11-kit system policy" >&2
+		exit 1
+	fi
+	printf '%s\n' "agent-vault: verified CA $expected_sha256 in the system trust policy"
+}
+
+is_system_trusted() {
+	trust extract --filter=ca-anchors --format=pem-bundle --purpose=server-auth --overwrite "$anchors_file" >/dev/null &&
+		openssl verify -purpose any -CAfile "$anchors_file" "$ca_file" >/dev/null 2>&1
+}
+
+run_as_root() {
+	if [ "$(id -u)" -eq 0 ]; then
+		"$@"
+	else
+		require_command sudo
+		sudo "$@"
+	fi
+}
+
+require_command openssl
+require_command trust
+verify_embedded_certificate
+
+case "${1:-}" in
+	install)
+		if is_system_trusted; then
+			printf '%s\n' "agent-vault: CA $expected_sha256 is already trusted"
+		else
+			run_as_root trust anchor --store "$ca_file"
+			run_as_root trust extract-compat
+		fi
+		verify_system_trust
+		;;
+	verify)
+		verify_system_trust
+		;;
+	remove)
+		if is_system_trusted; then
+			run_as_root trust anchor --remove "$ca_file"
+			run_as_root trust extract-compat
+			if is_system_trusted; then
+				echo "agent-vault: CA $expected_sha256 is still trusted; another matching anchor may remain" >&2
+				exit 1
+			fi
+		else
+			printf '%s\n' "agent-vault: CA $expected_sha256 is already absent from system trust"
+			exit 0
+		fi
+		printf '%s\n' "agent-vault: removed CA $expected_sha256 from the system trust policy"
+		;;
+	*)
+		echo "Usage: $0 {install|verify|remove}" >&2
+		echo "Review this script, then run '$0 install'." >&2
+		echo "Linux installation requires p11-kit trust anchor and trust extract-compat." >&2
+		exit 2
+		;;
+esac

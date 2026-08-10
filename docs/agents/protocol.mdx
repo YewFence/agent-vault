@@ -88,11 +88,14 @@ The agent writes this line unchanged. No URL rewriting. No `Authorization` heade
 
 | Variable | Purpose |
 |---|---|
-| `HTTPS_PROXY` | Points at the MITM listener (`http://{token}:{vault}@host:14322`) — plain HTTP, deploy on a trusted/private network |
-| `HTTP_PROXY` | Same URL as `HTTPS_PROXY` — plain `http://` upstreams route through the same listener via absolute-form forward-proxy requests |
-| `NO_PROXY` | `localhost,127.0.0.1` — so agent-to-vault traffic skips the proxy |
+| `HTTPS_PROXY`, `https_proxy` | Point at the MITM listener (`http://{token}:{vault}@host:14322`) — plain HTTP, deploy on a trusted/private network |
+| `HTTP_PROXY`, `http_proxy` | Same URL as `HTTPS_PROXY` — plain `http://` upstreams route through the same listener via absolute-form forward-proxy requests |
+| `NO_PROXY`, `no_proxy` | Include `localhost`, `127.0.0.1`, and the Agent Vault control-plane hostname |
 | `NODE_USE_ENV_PROXY` | `1` — enables Node.js v22.21+ built-in proxy support for `fetch()` and `http.get()`/`https.get()` |
-| `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `DENO_CERT` | Point standard HTTP libraries at the Agent Vault root CA so the re-signed upstream TLS certificates validate |
+| `UV_SYSTEM_CERTS` | `true` — makes uv use the native system certificate verifier |
+| `NODE_EXTRA_CA_CERTS` | Adds the Agent Vault CA for Node without replacing public roots |
+
+Before host-mode `vault run`, install the current Agent Vault CA in the native trust store with a saved and reviewed `agent-vault ca install-script`. Replacement-style CA variables are cleared so `NO_PROXY` traffic and public HTTPS endpoints retain normal system-root validation. Container mode installs the CA inside its image and uses a merged system bundle for file-oriented clients.
 
 <Tip>
 The MITM listener accepts both `CONNECT host:port` (HTTPS upstreams) and absolute-form forward-proxy requests (`POST http://host/path HTTP/1.1`) on the same port. Plain-HTTP upstreams are intercepted, audited, and credential-injected just like HTTPS upstreams.

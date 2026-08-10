@@ -195,7 +195,7 @@ describe("SessionsResource", () => {
 });
 
 describe("buildProxyEnv()", () => {
-  it("builds complete env with cert path variables", () => {
+  it("preserves native trust while adding proxy and Node CA settings", () => {
     const config: ContainerConfig = {
       env: {
         HTTPS_PROXY: "http://tok:vault@127.0.0.1:14322",
@@ -211,11 +211,12 @@ describe("buildProxyEnv()", () => {
     expect(env.HTTP_PROXY).toBe("http://tok:vault@127.0.0.1:14322");
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1,127.0.0.1");
     expect(env.NODE_USE_ENV_PROXY).toBe("1");
-    expect(env.SSL_CERT_FILE).toBe("/etc/ssl/agent-vault-ca.pem");
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/agent-vault-ca.pem");
-    expect(env.REQUESTS_CA_BUNDLE).toBe("/etc/ssl/agent-vault-ca.pem");
-    expect(env.CURL_CA_BUNDLE).toBe("/etc/ssl/agent-vault-ca.pem");
-    expect(env.GIT_SSL_CAINFO).toBe("/etc/ssl/agent-vault-ca.pem");
-    expect(env.DENO_CERT).toBe("/etc/ssl/agent-vault-ca.pem");
+    expect(env.UV_SYSTEM_CERTS).toBe("true");
+    expect(env).not.toHaveProperty("SSL_CERT_FILE");
+    expect(env).not.toHaveProperty("REQUESTS_CA_BUNDLE");
+    expect(env).not.toHaveProperty("CURL_CA_BUNDLE");
+    expect(env).not.toHaveProperty("GIT_SSL_CAINFO");
+    expect(env).not.toHaveProperty("DENO_CERT");
   });
 });

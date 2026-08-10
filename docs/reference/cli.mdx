@@ -136,13 +136,30 @@ description: "Complete reference for all Agent Vault CLI commands."
     # Print to stdout
     agent-vault ca fetch > ca.pem
 
-    # Save directly to a file
-    agent-vault ca fetch -o /etc/ssl/certs/agent-vault-ca.pem
+    # Save directly to a local file
+    agent-vault ca fetch -o agent-vault-ca.pem
 
-    # Pipe into the macOS system keychain
-    agent-vault ca fetch | sudo security add-trusted-cert -d -r trustRoot \
-        -k /Library/Keychains/System.keychain /dev/stdin
+    # For native trust-store installation, generate a reviewable script instead.
+    agent-vault ca install-script > agent-vault-ca-install.sh
     ```
+  </Accordion>
+
+  <Accordion title="agent-vault ca install-script">
+    ```bash
+    agent-vault ca install-script [--address URL] > agent-vault-ca-install.sh
+    ```
+
+    Fetch the current CA and print a reviewable platform-native script to stdout. The command does not execute the script, change a trust store, or elevate privileges. Save it, inspect the embedded certificate fingerprint and commands, then run the reviewed file manually. Do not pipe this command directly to a shell.
+
+    On Linux the script requires p11-kit `trust anchor` and `trust extract-compat`; it does not detect distributions. On macOS it presents explicit login-keychain and System-keychain actions. Each script can install, verify, or remove the exact embedded certificate.
+  </Accordion>
+
+  <Accordion title="agent-vault ca verify">
+    ```bash
+    agent-vault ca verify [--file ca.pem] [--address URL]
+    ```
+
+    Verify the current CA, or the PEM supplied with `--file`, against the native system trust policy. `vault run` performs the same check before starting a host child process and prints the installation-script command if it fails.
   </Accordion>
 </AccordionGroup>
 
@@ -364,7 +381,7 @@ description: "Complete reference for all Agent Vault CLI commands."
 
     Wrap a process with Agent Vault environment variables. `agent-vault run` is the shorthand; `agent-vault vault run` is the long form. Both are identical in behavior and flags.
 
-    The child process receives `AGENT_VAULT_ADDR`, `AGENT_VAULT_TOKEN`, and `AGENT_VAULT_VAULT`, plus `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` / `NODE_USE_ENV_PROXY` / `OPENCLAW_PROXY_URL` and CA-trust variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `DENO_CERT`) pointing at `~/.agent-vault/mitm-ca.pem`, so standard HTTP and HTTPS clients transparently route through the broker. `OPENCLAW_PROXY_URL` feeds OpenClaw's Proxyline managed proxy (OpenClaw requires this plus `proxy.enabled: true` in its config). `HTTPS_PROXY` and `HTTP_PROXY` both point at the same plain HTTP proxy URL — the listener handles CONNECT for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams on the same port. If the server's MITM proxy is unreachable, `vault run` aborts.
+    In host mode, `vault run` first requires the current Agent Vault CA to be installed in the native system trust store. It then passes `HTTPS_PROXY` / `HTTP_PROXY`, their lowercase equivalents, matching `NO_PROXY` / `no_proxy`, `NODE_USE_ENV_PROXY`, `OPENCLAW_PROXY_URL`, `UV_SYSTEM_CERTS=true`, and append-only `NODE_EXTRA_CA_CERTS`. It deliberately clears replacement-style variables such as `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, and `DENO_CERT` so the child retains public system roots. If verification fails, save and review `agent-vault ca install-script` before retrying, or use `--isolation=container`. Container mode installs the CA in the image trust store and points file-oriented clients at its complete system bundle. `OPENCLAW_PROXY_URL` feeds OpenClaw's Proxyline managed proxy (OpenClaw requires this plus `proxy.enabled: true` in its config). `HTTPS_PROXY` and `HTTP_PROXY` both point at the same plain HTTP proxy URL — the listener handles CONNECT for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams on the same port. If the server's MITM proxy is unreachable, `vault run` aborts.
 
     **Placeholder env delivery.** For every substitution with an explicit `env` setting on the vault's enabled services, the child additionally receives an env var holding the placeholder (e.g. `GITHUB_TOKEN=github_pat_thisisaplaceholder00…0`) — a spec-shaped fake value that passes SDK/static format checks and that the broker rewrites to the real credential on the wire. Substitutions without `env` do not affect the child environment. Parent-environment values for configured names are scrubbed first so a real credential set outside the vault never leaks into the child. If enabled services assign different placeholders to the same env name, the run aborts because one environment variable cannot represent both values. Fetching the service list failing also aborts the run. See [Credential-shaped placeholders](/learn/services#credential-shaped-placeholders-and-env-delivery).
 

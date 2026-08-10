@@ -89,29 +89,25 @@ agent-vault server --mitm-port 0 # disable
 HTTP/1.1 at the ingress (WebSocket upgrades over HTTP/1.1 are transparently brokered — useful for voice/realtime APIs like OpenAI Realtime). The terminator advertises only `http/1.1` in ALPN, so clients offering both `h2` and `http/1.1` fall back to `http/1.1` and have credentials injected normally; clients that strictly require `h2` fail the TLS handshake with a `no_application_protocol` alert.
 </Warning>
 
-A software-backed root CA is created on first launch under `~/.agent-vault/ca/` (private key encrypted with the DEK). Clients must trust this root before the proxied TLS handshake will succeed. `agent-vault vault run` handles this automatically for child processes — only fetch the CA manually when configuring agents outside of `vault run` (containers, CI, invited agents).
+A software-backed root CA is created on first launch under `~/.agent-vault/ca/` (private key encrypted with the DEK). Clients must trust this root before the proxied TLS handshake will succeed. On macOS and Linux, host-mode `agent-vault vault run` requires that CA in the native system trust store before it starts its child process.
 
 Fetch the root certificate from any machine that can reach the server:
 
 ```bash
-# From stdout (pipe into a trust-store installer)
-agent-vault ca fetch > agent-vault-ca.pem
+# Generate a script without executing it.
+agent-vault ca install-script > agent-vault-ca-install.sh
 
-# Save to a file
-agent-vault ca fetch -o /etc/ssl/certs/agent-vault-ca.pem
+# Inspect the embedded PEM, SHA-256 fingerprint, and native commands first.
+${EDITOR:-vi} agent-vault-ca-install.sh
 
-# Or with curl — the endpoint is public
-curl -O http://localhost:14321/v1/mitm/ca.pem
+# Run the reviewed script manually on Linux.
+./agent-vault-ca-install.sh install
+
+# On macOS, choose a Keychain scope instead:
+# ./agent-vault-ca-install.sh install-login  # or install-system
 ```
 
-Then install into the relevant trust store. For example, on macOS:
-
-```bash
-agent-vault ca fetch | sudo security add-trusted-cert -d -r trustRoot \
-    -k /Library/Keychains/System.keychain /dev/stdin
-```
-
-See the [CLI reference](/reference/cli#ca) for all `agent-vault ca fetch` flags.
+The command only emits a script; it never invokes `sudo`, edits a trust store, or runs its output. Linux uses the p11-kit capability contract (`trust anchor` and `trust extract-compat`) rather than a distribution path table. The editable `examples/agent-vault-env.sh` reference follows this native system-trust path only; file-oriented clients must be configured separately with a bundle containing both system roots and the Agent Vault CA. See the [CLI reference](/reference/cli#ca) for all CA commands.
 
 ## Upgrade and verify
 

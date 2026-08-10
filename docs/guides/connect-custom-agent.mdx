@@ -59,11 +59,12 @@ When the agent is launched via `vault run`, these additional variables are also 
 
 | Variable | Purpose |
 |---|---|
-| `HTTPS_PROXY` | Routes HTTPS traffic through the transparent proxy (CONNECT) |
-| `HTTP_PROXY` | Same URL as `HTTPS_PROXY` — plain `http://` upstreams route through the same listener via absolute-form forward-proxy requests |
-| `NO_PROXY` | `localhost,127.0.0.1` — so agent-to-vault traffic skips the proxy |
+| `HTTPS_PROXY`, `https_proxy` | Route HTTPS traffic through the transparent proxy (CONNECT) |
+| `HTTP_PROXY`, `http_proxy` | Same URL as `HTTPS_PROXY` — plain `http://` upstreams route through the same listener via absolute-form forward-proxy requests |
+| `NO_PROXY`, `no_proxy` | Include `localhost`, `127.0.0.1`, and the Agent Vault control-plane hostname so agent-to-vault traffic skips the proxy |
 | `NODE_USE_ENV_PROXY` | Enables Node.js 22.21+ built-in proxy support |
-| `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `DENO_CERT` | Trust the Agent Vault root CA from standard HTTP libraries |
+| `UV_SYSTEM_CERTS` | Makes uv use the native system verifier |
+| `NODE_EXTRA_CA_CERTS` | Adds the Agent Vault CA for Node without replacing its default trust roots |
 
 ## Make requests
 
@@ -121,25 +122,24 @@ Leave the upstream `Authorization` header blank or set it to a placeholder — A
 If your agent wasn't launched via `vault run` (e.g. an agent created via `agent create`, a Docker container, a sandboxed runtime), configure the proxy yourself. The MITM listener is plain HTTP — deploy on a trusted/private network. Set `HTTPS_PROXY` and `HTTP_PROXY` to the same URL — the listener handles `CONNECT` (for `https://` upstreams) and absolute-form forward-proxy requests (for `http://` upstreams) on the same port.
 
 ```bash
-# 1. Fetch the CA certificate
-agent-vault ca fetch -o /etc/ssl/certs/agent-vault-ca.pem
+# 1. Save, inspect, and run the native CA installation script.
+agent-vault ca install-script > agent-vault-ca-install.sh
+${EDITOR:-vi} agent-vault-ca-install.sh
+# Linux: ./agent-vault-ca-install.sh install
+# macOS: ./agent-vault-ca-install.sh install-login  # or install-system
 
 # 2. Build the proxy URL (basic auth: token:vault)
 export HTTPS_PROXY="http://${AGENT_VAULT_TOKEN}:my-vault@127.0.0.1:14322"
+export https_proxy="$HTTPS_PROXY"
 export HTTP_PROXY="$HTTPS_PROXY"
-export NO_PROXY="localhost,127.0.0.1"
+export http_proxy="$HTTPS_PROXY"
+export NO_PROXY="localhost,127.0.0.1,<agent-vault-control-host>"
+export no_proxy="$NO_PROXY"
 export NODE_USE_ENV_PROXY=1
-
-# 3. Point standard HTTP libraries at the CA
-export SSL_CERT_FILE=/etc/ssl/certs/agent-vault-ca.pem
-export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/agent-vault-ca.pem
-export REQUESTS_CA_BUNDLE=/etc/ssl/certs/agent-vault-ca.pem
-export CURL_CA_BUNDLE=/etc/ssl/certs/agent-vault-ca.pem
-export GIT_SSL_CAINFO=/etc/ssl/certs/agent-vault-ca.pem
-export DENO_CERT=/etc/ssl/certs/agent-vault-ca.pem
+export UV_SYSTEM_CERTS=true
 ```
 
-For containerized agents, the [TypeScript SDK](https://github.com/Infisical/agent-vault/tree/main/sdks/sdk-typescript) provides `buildProxyEnv()`, which returns the complete environment block from a session's `containerConfig`.
+Do not point `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, or `DENO_CERT` at a CA-only Agent Vault PEM: those variables replace the normal public roots. For a file-only client, create a bundle from its system roots plus the Agent Vault CA, then point that client at the merged file. For containerized agents, the [TypeScript SDK](https://github.com/Infisical/agent-vault/tree/main/sdks/sdk-typescript) provides `buildProxyEnv()` after the target image trusts `containerConfig.caCertificate`.
 
 ## Discover available services
 

@@ -1,72 +1,75 @@
 #!/bin/sh
-# Copy this file, remove the exports your clients do not use, then source it:
+# Copy this file, review the exports your clients need, then source it:
 #   . ./agent-vault-env.sh
-# Set AGENT_VAULT_MITM_ADDR first when the server does not use port 14322.
+# The Agent Vault CA must already be installed in the native system trust store.
 
 agent_vault_env() {
 	: "${AGENT_VAULT_ADDR:=http://127.0.0.1:14321}"
 	: "${AGENT_VAULT_MITM_ADDR:=127.0.0.1:14322}"
-	: "${AGENT_VAULT_CA_FILE:=$HOME/.agent-vault/mitm-ca.pem}"
+	: "${AGENT_VAULT_NO_PROXY:=${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1}"
+	export AGENT_VAULT_ADDR
+
 	if [ -z "${AGENT_VAULT_VAULT:-}" ]; then
-		AGENT_VAULT_VAULT="$(agent-vault vault current)" || return 1
+		if ! AGENT_VAULT_VAULT="$(agent-vault vault current)"; then
+			AGENT_VAULT_VAULT="default"
+			echo 'HINT: Use "default" vault, to mute this hint, set AGENT_VAULT_VAULT to the vault you want to use.' >&2
+		fi
 	fi
 
 	if [ -z "${AGENT_VAULT_TOKEN:-}" ]; then
-		AGENT_VAULT_TOKEN="$(
+		if ! AGENT_VAULT_TOKEN="$(
 			agent-vault vault token \
 				--address "$AGENT_VAULT_ADDR" \
 				--vault "$AGENT_VAULT_VAULT"
-		)" || return 1
+		)"; then
+			echo "ERR: Failed to retrieve vault token, set AGENT_VAULT_TOKEN first" >&2
+			return 1
+		fi
 	fi
 
-	mkdir -p "$(dirname "$AGENT_VAULT_CA_FILE")" || return 1
-	agent-vault ca fetch \
-		--address "$AGENT_VAULT_ADDR" \
-		--output "$AGENT_VAULT_CA_FILE" || return 1
+	if ! agent-vault ca verify; then
+	    echo "ERR: Agent Vault CA is not installed in the system trust store" >&2
+		echo "HINT: agent-vault: install the CA first: agent-vault ca install-script > agent-vault-ca-install.sh" >&2
+		return 1
+	fi
 
 	agent_vault_proxy_url="http://${AGENT_VAULT_TOKEN}:${AGENT_VAULT_VAULT}@${AGENT_VAULT_MITM_ADDR}"
-	agent_vault_placeholder_script="$(
-		AGENT_VAULT_TOKEN="$AGENT_VAULT_TOKEN" \
-			AGENT_VAULT_ADDR="$AGENT_VAULT_ADDR" \
-			AGENT_VAULT_VAULT="$AGENT_VAULT_VAULT" \
-			agent-vault placeholders
-	)" || return 1
-	agent_vault_no_proxy="localhost,127.0.0.1"
-	if [ -n "${NO_PROXY:-}" ]; then
-		agent_vault_no_proxy="${NO_PROXY},${agent_vault_no_proxy}"
+
+	export AGENT_VAULT_ADDR AGENT_VAULT_TOKEN AGENT_VAULT_VAULT
+	export AGENT_VAULT_MITM_ADDR AGENT_VAULT_NO_PROXY
+	export HTTPS_PROXY="$agent_vault_proxy_url"
+	export https_proxy="$agent_vault_proxy_url"
+	export HTTP_PROXY="$agent_vault_proxy_url"
+	export http_proxy="$agent_vault_proxy_url"
+	export NO_PROXY="$AGENT_VAULT_NO_PROXY"
+	export no_proxy="$AGENT_VAULT_NO_PROXY"
+
+	unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE GIT_SSL_CAINFO DENO_CERT
+	export UV_SYSTEM_CERTS=true
+	export NODE_USE_ENV_PROXY=1
+	export OPENCLAW_PROXY_URL="$agent_vault_proxy_url"
+	if ! agent_vault_placeholder_script="$(agent-vault placeholders)"; then
+		echo "ERR: Failed to get placeholders env" >&2
+		unset agent_vault_placeholder_script agent_vault_proxy_url
+		return 1
+	fi
+	if ! eval "$agent_vault_placeholder_script"; then
+	    echo "ERR: Failed to evaluate placeholders env" >&2
+		unset agent_vault_placeholder_script agent_vault_proxy_url
+		return 1
 	fi
 
-	export AGENT_VAULT_ADDR
-	export AGENT_VAULT_TOKEN
-	export AGENT_VAULT_VAULT
-	export HTTPS_PROXY="$agent_vault_proxy_url"
-	export HTTP_PROXY="$agent_vault_proxy_url"
-	export NO_PROXY="$agent_vault_no_proxy"
+	# Customize your environment here, for example:
+	# export MISE_GITHUB_TOKEN="$GITHUB_TOKEN"
 
-	# Keep only the trust variables used by your clients.
-	export SSL_CERT_FILE="$AGENT_VAULT_CA_FILE"
-	export CURL_CA_BUNDLE="$AGENT_VAULT_CA_FILE"
-	export REQUESTS_CA_BUNDLE="$AGENT_VAULT_CA_FILE"
-	export GIT_SSL_CAINFO="$AGENT_VAULT_CA_FILE"
-
-	# Node.js:
-	# export NODE_EXTRA_CA_CERTS="$AGENT_VAULT_CA_FILE"
-	# export NODE_USE_ENV_PROXY=1
-
-	# Deno:
-	# export DENO_CERT="$AGENT_VAULT_CA_FILE"
-
-	# OpenClaw:
-	# export OPENCLAW_PROXY_URL="$agent_vault_proxy_url"
-
-	eval "$agent_vault_placeholder_script" || return 1
-	unset agent_vault_no_proxy agent_vault_placeholder_script agent_vault_proxy_url
+	unset agent_vault_placeholder_script agent_vault_proxy_url
 }
 
 agent_vault_env
 agent_vault_env_status=$?
 unset -f agent_vault_env
 if [ "$agent_vault_env_status" -ne 0 ]; then
+	# shellcheck disable=SC2317 # return is for sourcing; exit is for direct execution.
 	return "$agent_vault_env_status" 2>/dev/null || exit "$agent_vault_env_status"
 fi
 unset agent_vault_env_status

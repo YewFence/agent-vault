@@ -41,20 +41,22 @@ func TestBuildContainerEnv_ProxyURL(t *testing.T) {
 	}
 }
 
-func TestBuildContainerEnv_CAPathsAllPointAtBindMount(t *testing.T) {
+func TestBuildContainerEnv_CAPathsPreserveSystemRoots(t *testing.T) {
 	env := BuildContainerEnv("tok", "v", 14321, 14322)
 	vars := envMap(env)
 	for _, k := range []string{
 		"SSL_CERT_FILE",
-		"NODE_EXTRA_CA_CERTS",
 		"REQUESTS_CA_BUNDLE",
 		"CURL_CA_BUNDLE",
 		"GIT_SSL_CAINFO",
 		"DENO_CERT",
 	} {
-		if vars[k] != ContainerCAPath {
-			t.Errorf("%s = %q, want %q (container-internal path)", k, vars[k], ContainerCAPath)
+		if vars[k] != ContainerSystemCAPath {
+			t.Errorf("%s = %q, want merged system bundle %q", k, vars[k], ContainerSystemCAPath)
 		}
+	}
+	if vars["NODE_EXTRA_CA_CERTS"] != ContainerCAPath {
+		t.Errorf("NODE_EXTRA_CA_CERTS = %q, want append-only CA path %q", vars["NODE_EXTRA_CA_CERTS"], ContainerCAPath)
 	}
 }
 
@@ -105,6 +107,35 @@ func TestBuildProxyEnv_IPv6HostIsBracketed(t *testing.T) {
 	}
 	if !strings.Contains(vars["HTTPS_PROXY"], "[::1]:14322") {
 		t.Errorf("HTTPS_PROXY = %q, want bracketed [::1]:14322 authority", vars["HTTPS_PROXY"])
+	}
+}
+
+func TestBuildProxyEnv_HostUsesSystemTrust(t *testing.T) {
+	env := BuildProxyEnv(ProxyEnvParams{
+		Host:    "vault.example.test",
+		Port:    14322,
+		Token:   "tok",
+		Vault:   "v",
+		CAPath:  "/tmp/agent-vault.pem",
+		NoProxy: "metadata.internal,localhost",
+	})
+	vars := envMap(env)
+	for _, key := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "DENO_CERT"} {
+		if _, ok := vars[key]; ok {
+			t.Errorf("host proxy env unexpectedly contains %s", key)
+		}
+	}
+	if vars["UV_SYSTEM_CERTS"] != "true" {
+		t.Errorf("UV_SYSTEM_CERTS = %q", vars["UV_SYSTEM_CERTS"])
+	}
+	if vars["NODE_EXTRA_CA_CERTS"] != "/tmp/agent-vault.pem" {
+		t.Errorf("NODE_EXTRA_CA_CERTS = %q", vars["NODE_EXTRA_CA_CERTS"])
+	}
+	if vars["NO_PROXY"] != "localhost,127.0.0.1,vault.example.test,metadata.internal" {
+		t.Errorf("NO_PROXY = %q", vars["NO_PROXY"])
+	}
+	if vars["no_proxy"] != vars["NO_PROXY"] {
+		t.Errorf("no_proxy = %q, want %q", vars["no_proxy"], vars["NO_PROXY"])
 	}
 }
 

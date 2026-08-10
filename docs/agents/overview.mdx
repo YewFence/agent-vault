@@ -9,7 +9,7 @@ There are two ways to connect an agent: **wrapping** a local process or **creati
 
 ## Wrapping with `vault run`
 
-The simplest approach for local development. Wraps a local agent process with the environment variables it needs — no token to manage. `vault run` also pre-configures `HTTPS_PROXY`/`HTTP_PROXY` and the CA trust chain on the child, so the agent calls upstream URLs directly (over `https://` or `http://`) and Agent Vault transparently injects credentials at the proxy boundary.
+The simplest approach for local development. Install the current CA into the native host trust store using a saved and reviewed `agent-vault ca install-script`, then wrap a local agent process with the environment variables it needs. `vault run` pre-configures `HTTPS_PROXY`/`HTTP_PROXY` and preserves system CA trust on the child, so the agent calls upstream URLs directly (over `https://` or `http://`) and Agent Vault transparently injects credentials at the proxy boundary.
 
 ```bash
 agent-vault vault run -- claude    # Claude Code

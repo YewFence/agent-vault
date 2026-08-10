@@ -44,7 +44,7 @@ const env = buildProxyEnv(session.containerConfig!, certPath);
 | `env.NO_PROXY` | Bypass list (`localhost,127.0.0.1`) |
 | `caCertificate` | Root CA PEM content — mount this into the container |
 
-`buildProxyEnv()` expands the config with `NODE_USE_ENV_PROXY=1` (for Node.js v22.21.0+ native proxy support) and CA trust variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `DENO_CERT`) all pointing at `certPath`.
+Install `caCertificate` into the target image's native trust store before starting the agent. `buildProxyEnv()` expands the config with `NODE_USE_ENV_PROXY=1` (for Node.js v22.21.0+ native proxy support), `UV_SYSTEM_CERTS=true`, and `NODE_EXTRA_CA_CERTS=certPath`. It intentionally does not set `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, or `DENO_CERT`: pointing those replacement-style variables at a CA-only PEM would hide public system roots.
 
 `containerConfig` is `null` when the server has MITM disabled (`--mitm-port 0`).
 

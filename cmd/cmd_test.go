@@ -51,11 +51,26 @@ func TestCASubcommandsRegistered(t *testing.T) {
 		registered[c.Name()] = true
 	}
 
-	expected := []string{"fetch"}
+	expected := []string{"fetch", "verify", "install-script"}
 	for _, name := range expected {
 		if !registered[name] {
 			t.Errorf("expected ca subcommand %q to be registered, but it was not", name)
 		}
+	}
+}
+
+func TestCAAdditionalFlags(t *testing.T) {
+	caCommand := findSubcommand(rootCmd, "ca")
+	if caCommand == nil {
+		t.Fatal("ca command not found")
+	}
+	verifyCommand := findSubcommand(caCommand, "verify")
+	if verifyCommand == nil || verifyCommand.Flags().Lookup("file") == nil || verifyCommand.Flags().Lookup("address") == nil {
+		t.Fatal("ca verify must expose --file and --address")
+	}
+	installCommand := findSubcommand(caCommand, "install-script")
+	if installCommand == nil || installCommand.Flags().Lookup("address") == nil {
+		t.Fatal("ca install-script must expose --address")
 	}
 }
 

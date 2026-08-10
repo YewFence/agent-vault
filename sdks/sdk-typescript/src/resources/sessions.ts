@@ -25,9 +25,9 @@ export interface ContainerConfig {
     NO_PROXY: string;
   };
   /** Root CA certificate PEM content. Mount this into the container and
-   *  point CA trust env vars (SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, etc.)
-   *  at the mount path. Use {@link buildProxyEnv} to generate the full
-   *  env var set once you know the mount path. */
+   *  install it into the target image's native trust store. Use
+   *  {@link buildProxyEnv} for proxy settings and Node's append-only CA
+   *  setting once you know the mount path. */
   caCertificate: string;
 }
 
@@ -50,8 +50,9 @@ export interface Session {
 const DEFAULT_MITM_PORT = 14322;
 
 /**
- * Build the complete set of proxy environment variables for a container,
- * including CA trust variables pointing at the given certificate path.
+ * Build proxy environment variables for a container whose CA is installed in
+ * its native trust store. Replacement-style CA variables are intentionally
+ * omitted because a CA-only PEM would hide public system roots.
  *
  * @param config - The container config from a minted session.
  * @param certPath - The path where the CA certificate will be mounted
@@ -62,19 +63,15 @@ export function buildProxyEnv(
   config: ContainerConfig,
   certPath: string,
 ): Record<string, string> {
-  // Proxy and CA trust variables must stay in sync with augmentEnvWithMITM() in cmd/run.go.
+  // Proxy settings must stay in sync with BuildProxyEnv in internal/isolation/env.go.
   return {
     HTTPS_PROXY: config.env.HTTPS_PROXY,
     HTTP_PROXY: config.env.HTTP_PROXY,
     NO_PROXY: config.env.NO_PROXY,
     NODE_USE_ENV_PROXY: "1",
     OPENCLAW_PROXY_URL: config.env.HTTPS_PROXY,
-    SSL_CERT_FILE: certPath,
+    UV_SYSTEM_CERTS: "true",
     NODE_EXTRA_CA_CERTS: certPath,
-    REQUESTS_CA_BUNDLE: certPath,
-    CURL_CA_BUNDLE: certPath,
-    GIT_SSL_CAINFO: certPath,
-    DENO_CERT: certPath,
   };
 }
 
@@ -105,7 +102,7 @@ export class SessionsResource {
    * URL, bypass list, and root CA certificate. Pass these to your container
    * runtime so the sandboxed agent's HTTPS traffic routes through Agent Vault
    * transparently. Use {@link buildProxyEnv} to expand the config into a
-   * complete env var set once you know the CA certificate mount path.
+   * proxy env vars after the target image trusts the mounted CA.
    *
    * `containerConfig` is `null` when the server has MITM disabled.
    */

@@ -140,13 +140,7 @@ func TestReferenceEnvironmentScript(t *testing.T) {
 case "$1 $2" in
   "vault current") printf '%s\n' project ;;
   "vault token") printf '%s\n' av_sess_test ;;
-  "ca fetch")
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--output" ]; then printf '%s\n' TEST_CA > "$2"; exit; fi
-      shift
-    done
-    exit 1
-    ;;
+  "ca verify") exit 0 ;;
   "placeholders ") printf '%s\n' "export TEST_PLACEHOLDER='placeholder-value'" ;;
   *) exit 1 ;;
 esac
@@ -160,7 +154,10 @@ esac
 		t.Fatalf("resolve reference script: %v", err)
 	}
 	command := `. "$1"
+. "$1"
 printf '%s\n' "$AGENT_VAULT_TOKEN" "$AGENT_VAULT_VAULT" "$TEST_PLACEHOLDER" "$NO_PROXY"
+printf '%s\n' "$HTTPS_PROXY" "$https_proxy" "$HTTP_PROXY" "$http_proxy" "$no_proxy"
+printf '%s\n' "${SSL_CERT_FILE-unset}" "${CURL_CA_BUNDLE-unset}" "$UV_SYSTEM_CERTS" "${NODE_EXTRA_CA_CERTS:-unset}"
 if set | grep '^agent_vault_' >/dev/null; then exit 1; fi
 `
 	cmd := exec.Command("sh", "-c", command, "sh", scriptPath)
@@ -177,7 +174,11 @@ if set | grep '^agent_vault_' >/dev/null; then exit 1; fi
 	if err != nil {
 		t.Fatalf("source reference script: %v\n%s", err, out)
 	}
-	want := "av_sess_test\nproject\nplaceholder-value\nmetadata.internal,localhost,127.0.0.1\n"
+	proxy := "http://av_sess_test:project@vault.example.test:14322"
+	want := "av_sess_test\nproject\nplaceholder-value\nmetadata.internal,localhost,127.0.0.1\n" +
+		proxy + "\n" + proxy + "\n" + proxy + "\n" + proxy + "\n" +
+		"metadata.internal,localhost,127.0.0.1\n" +
+		"unset\nunset\ntrue\nunset\n"
 	if got := string(out); got != want {
 		t.Fatalf("script output = %q, want %q", got, want)
 	}

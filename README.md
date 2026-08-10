@@ -156,21 +156,28 @@ agent-vault vault run -- codex
 agent-vault vault run -- opencode
 ```
 
-For a customizable current-shell setup, copy the reference script and remove
-the CA trust variables your clients do not use:
+For a customizable current-shell setup, first save and review the native CA
+installation script, then copy the reference environment script:
 
 ```bash
+agent-vault ca install-script > agent-vault-ca-install.sh
+${EDITOR:-vi} ./agent-vault-ca-install.sh
+# Linux:
+./agent-vault-ca-install.sh install
+# macOS:
+# ./agent-vault-ca-install.sh install-login  # or install-system
 cp examples/agent-vault-env.sh ./agent-vault-env.sh
 ${EDITOR:-vi} ./agent-vault-env.sh
 . ./agent-vault-env.sh
 ```
 
 The script is a minimal, editable setup rather than an exact copy of
-`agent-vault run`: it configures the token, proxy, and selected CA trust
-variables, then uses `agent-vault placeholders` to export the
+`agent-vault run`: it defaults to native system trust, configures both proxy
+variable casings, and uses `agent-vault placeholders` to export the
 credential-shaped placeholders declared by enabled services. The placeholders
 are fake values; real credentials remain inside Agent Vault and are attached at
-the proxy.
+the proxy. Set `AGENT_VAULT_NO_PROXY` before sourcing when the control plane is
+remote, and edit the client-specific exports directly when your setup differs.
 
 Alternatively, if your agent is running with Docker, you can install the Agent Vault CLI via a Dockerfile by copying the binary into your own image and using it to start up your agent process:
 
@@ -234,13 +241,13 @@ const session = await av
   .sessions.create({ vaultRole: "proxy" });
 
 // certPath is where you'll mount the CA certificate inside the sandbox.
+// Install caCert into the image's native trust store before starting the agent.
 const certPath = "/etc/ssl/agent-vault-ca.pem";
+const caCert = session.containerConfig!.caCertificate;
 
 // env: { HTTPS_PROXY, HTTP_PROXY, NO_PROXY, NODE_USE_ENV_PROXY,
-//         SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE,
-//         CURL_CA_BUNDLE, GIT_SSL_CAINFO, DENO_CERT }
+//         UV_SYSTEM_CERTS, NODE_EXTRA_CA_CERTS }
 const env = buildProxyEnv(session.containerConfig!, certPath);
-const caCert = session.containerConfig!.caCertificate;
 
 // Pass `env` as environment variables and mount `caCert` at `certPath`
 // in your sandbox — Docker, Daytona, E2B, Firecracker, or any other runtime.

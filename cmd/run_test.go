@@ -135,7 +135,15 @@ func fakeMITMServer(t *testing.T, pem string, advertisedPort int) *httptest.Serv
 	}))
 }
 
+func stubSystemCATrust(t *testing.T) {
+	t.Helper()
+	previous := systemCAVerifier
+	systemCAVerifier = func([]byte, string) error { return nil }
+	t.Cleanup(func() { systemCAVerifier = previous })
+}
+
 func TestAugmentEnvWithMITM_Enabled(t *testing.T) {
+	stubSystemCATrust(t)
 	const fakePEM = "-----BEGIN CERTIFICATE-----\nMIIFAKE\n-----END CERTIFICATE-----\n"
 	srv := fakeMITMServer(t, fakePEM, 9001)
 	defer srv.Close()
@@ -162,16 +170,15 @@ func TestAugmentEnvWithMITM_Enabled(t *testing.T) {
 
 	want := map[string]string{
 		"HTTPS_PROXY":         "", // checked separately below
+		"https_proxy":         "", // checked separately below
 		"HTTP_PROXY":          "", // checked separately below
+		"http_proxy":          "", // checked separately below
 		"NO_PROXY":            "", // checked separately — includes AV host
+		"no_proxy":            "", // checked separately — matches NO_PROXY
 		"NODE_USE_ENV_PROXY":  "1",
 		"OPENCLAW_PROXY_URL":  "", // checked separately below (equals HTTPS_PROXY)
-		"SSL_CERT_FILE":       caPath,
 		"NODE_EXTRA_CA_CERTS": caPath,
-		"REQUESTS_CA_BUNDLE":  caPath,
-		"CURL_CA_BUNDLE":      caPath,
-		"GIT_SSL_CAINFO":      caPath,
-		"DENO_CERT":           caPath,
+		"UV_SYSTEM_CERTS":     "true",
 	}
 	vars := envMap(env)
 	for k, v := range want {
@@ -193,6 +200,17 @@ func TestAugmentEnvWithMITM_Enabled(t *testing.T) {
 	}
 	if vars["OPENCLAW_PROXY_URL"] != vars["HTTPS_PROXY"] {
 		t.Errorf("OPENCLAW_PROXY_URL = %q, want it to equal HTTPS_PROXY = %q", vars["OPENCLAW_PROXY_URL"], vars["HTTPS_PROXY"])
+	}
+	if vars["https_proxy"] != vars["HTTPS_PROXY"] || vars["http_proxy"] != vars["HTTP_PROXY"] {
+		t.Error("lowercase proxy variables must match their uppercase forms")
+	}
+	if vars["no_proxy"] != vars["NO_PROXY"] {
+		t.Error("no_proxy must match NO_PROXY")
+	}
+	for _, key := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "DENO_CERT"} {
+		if _, ok := vars[key]; ok {
+			t.Errorf("host environment must not set replacement-style CA variable %s", key)
+		}
 	}
 
 	// NO_PROXY must include the AV host so control-plane calls bypass the proxy.
@@ -236,6 +254,7 @@ func TestAugmentEnvWithMITM_Enabled(t *testing.T) {
 // client falls back to DefaultMITMPort rather than emitting a URL with
 // port 0.
 func TestAugmentEnvWithMITM_PortFallback(t *testing.T) {
+	stubSystemCATrust(t)
 	const fakePEM = "-----BEGIN CERTIFICATE-----\nMIIFAKE\n-----END CERTIFICATE-----\n"
 	srv := fakeMITMServer(t, fakePEM, 0) // no port header
 	defer srv.Close()
@@ -257,6 +276,7 @@ func TestAugmentEnvWithMITM_PortFallback(t *testing.T) {
 // over the injected MITM value and bypass credential injection entirely.
 // The fix strips the parent entries before appending the new ones.
 func TestAugmentEnvWithMITM_DedupesParentEnv(t *testing.T) {
+	stubSystemCATrust(t)
 	const fakePEM = "-----BEGIN CERTIFICATE-----\nMIIFAKE\n-----END CERTIFICATE-----\n"
 	srv := fakeMITMServer(t, fakePEM, 14322)
 	defer srv.Close()
@@ -266,7 +286,10 @@ func TestAugmentEnvWithMITM_DedupesParentEnv(t *testing.T) {
 		"FOO=bar",
 		"HTTPS_PROXY=http://corp-proxy:3128",
 		"HTTP_PROXY=http://corp-proxy:3128",
+		"https_proxy=http://lower-proxy:3128",
+		"http_proxy=http://lower-proxy:3128",
 		"NO_PROXY=internal.example.com",
+		"no_proxy=metadata.internal",
 		"SSL_CERT_FILE=/etc/ssl/corp-ca.pem",
 		"NODE_EXTRA_CA_CERTS=/etc/ssl/corp-ca.pem",
 		"REQUESTS_CA_BUNDLE=/etc/ssl/corp-ca.pem",
@@ -288,7 +311,7 @@ func TestAugmentEnvWithMITM_DedupesParentEnv(t *testing.T) {
 			counts[kv[:i]]++
 		}
 	}
-	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY", "OPENCLAW_PROXY_URL", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "DENO_CERT"} {
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY", "OPENCLAW_PROXY_URL", "UV_SYSTEM_CERTS", "NODE_EXTRA_CA_CERTS"} {
 		if counts[k] != 1 {
 			t.Errorf("%s appears %d times in env, want exactly 1 (POSIX getenv returns first match)", k, counts[k])
 		}
@@ -301,14 +324,36 @@ func TestAugmentEnvWithMITM_DedupesParentEnv(t *testing.T) {
 	if !strings.Contains(vars["HTTPS_PROXY"], "127.0.0.1:14322") {
 		t.Errorf("HTTPS_PROXY = %q, want the MITM URL", vars["HTTPS_PROXY"])
 	}
-	if vars["SSL_CERT_FILE"] != caPath {
-		t.Errorf("SSL_CERT_FILE = %q, want %q", vars["SSL_CERT_FILE"], caPath)
+	for _, key := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "DENO_CERT"} {
+		if _, ok := vars[key]; ok {
+			t.Errorf("replacement-style CA variable %s survived host setup", key)
+		}
+	}
+	if !strings.Contains(vars["NO_PROXY"], "internal.example.com") || !strings.Contains(vars["NO_PROXY"], "metadata.internal") {
+		t.Errorf("NO_PROXY = %q, want parent uppercase and lowercase entries preserved", vars["NO_PROXY"])
 	}
 	if vars["UNRELATED"] != "keep-me" {
 		t.Error("unrelated parent env vars must be preserved")
 	}
 	if vars["FOO"] != "bar" {
 		t.Error("unrelated parent env vars must be preserved")
+	}
+}
+
+func TestAugmentEnvWithMITM_SystemCANotTrusted(t *testing.T) {
+	previous := systemCAVerifier
+	systemCAVerifier = func([]byte, string) error { return fmt.Errorf("unknown authority") }
+	t.Cleanup(func() { systemCAVerifier = previous })
+
+	srv := fakeMITMServer(t, "-----BEGIN CERTIFICATE-----\nMIIFAKE\n-----END CERTIFICATE-----\n", 14322)
+	defer srv.Close()
+
+	_, _, _, err := augmentEnvWithMITM(nil, srv.URL, "tok", "v", filepath.Join(t.TempDir(), "ca.pem"))
+	if err == nil {
+		t.Fatal("expected host setup to fail when the CA is not system-trusted")
+	}
+	if !strings.Contains(err.Error(), "ca install-script") || !strings.Contains(err.Error(), "--isolation=container") {
+		t.Fatalf("error must include both remediation paths, got: %v", err)
 	}
 }
 

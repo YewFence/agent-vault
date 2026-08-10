@@ -56,16 +56,21 @@ Environment variables set on the child:
   AGENT_VAULT_ADDR   — base URL of the Agent Vault HTTP control server
   AGENT_VAULT_VAULT  — vault the session is scoped to
 
-The child also inherits HTTPS_PROXY / HTTP_PROXY / NO_PROXY /
-NODE_USE_ENV_PROXY / OPENCLAW_PROXY_URL plus the root CA trust variables
-(SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE,
-GIT_SSL_CAINFO, DENO_CERT) so both HTTPS and plain-HTTP clients
-transparently route through the broker. NODE_USE_ENV_PROXY=1 enables
-Node.js built-in proxy support (v22.21.0+) so fetch() and
-http.get()/https.get() honor the proxy env natively. OPENCLAW_PROXY_URL
-feeds OpenClaw's Proxyline managed proxy (OpenClaw requires this in
-addition to proxy.enabled in its config). HTTPS_PROXY and HTTP_PROXY
-both point at the same proxy URL — the listener accepts
+Host mode requires the current Agent Vault CA in the native system trust
+store. It injects uppercase and lowercase proxy variables, matching
+NO_PROXY/no_proxy, NODE_USE_ENV_PROXY, OPENCLAW_PROXY_URL,
+UV_SYSTEM_CERTS=true, and append-only NODE_EXTRA_CA_CERTS. It clears
+replacement-style CA variables (SSL_CERT_FILE, REQUESTS_CA_BUNDLE,
+CURL_CA_BUNDLE, GIT_SSL_CAINFO, DENO_CERT) so public system roots remain
+available. If the CA is missing, save and review the output of agent-vault ca
+install-script before retrying, or use --isolation=container. Container
+mode installs the CA in its image trust store and uses a complete system
+bundle for file-oriented clients. NODE_USE_ENV_PROXY=1 enables Node.js
+built-in proxy support (v22.21.0+) so fetch() and http.get()/https.get()
+honor the proxy env natively. OPENCLAW_PROXY_URL feeds OpenClaw's Proxyline
+managed proxy (OpenClaw requires this in addition to proxy.enabled in its
+config). HTTPS_PROXY and HTTP_PROXY both point at the same proxy URL — the
+listener accepts
 CONNECT for https:// upstreams and absolute-form forward-proxy requests
 for http:// on the same port. The root CA PEM is written to
 ~/.agent-vault/mitm-ca.pem.
@@ -622,16 +627,31 @@ func augmentEnvWithMITM(env []string, addr, token, vault, caPath string) ([]stri
 	if err := os.WriteFile(caPath, pem, 0o600); err != nil { //nolint:gosec
 		return env, 0, false, fmt.Errorf("write CA: %w", err)
 	}
+	if err := systemCAVerifier(pem, caPath); err != nil {
+		return env, 0, false, fmt.Errorf("Agent Vault CA is not trusted by the native system store: %w; review `agent-vault ca install-script > agent-vault-ca-install.sh`, run the saved script, then retry (or use --isolation=container)", err)
+	}
 
+	existingNoProxy := strings.Join([]string{envValue(env, "NO_PROXY"), envValue(env, "no_proxy")}, ",")
 	env = stripEnvKeys(env, mitmInjectedKeys)
 	env = append(env, isolation.BuildProxyEnv(isolation.ProxyEnvParams{
-		Host:   resolveMITMHost(addr),
-		Port:   port,
-		Token:  token,
-		Vault:  vault,
-		CAPath: caPath,
+		Host:    resolveMITMHost(addr),
+		Port:    port,
+		Token:   token,
+		Vault:   vault,
+		CAPath:  caPath,
+		NoProxy: existingNoProxy,
 	})...)
 	return env, port, true, nil
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
 
 // mintScopedSession resolves the target vault and mints a vault-scoped

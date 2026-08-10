@@ -1,0 +1,101 @@
+#!/bin/sh
+set -eu
+
+expected_sha256='{{CA_SHA256}}'
+login_keychain="$HOME/Library/Keychains/login.keychain-db"
+system_keychain='/Library/Keychains/System.keychain'
+ca_file="$(mktemp "${TMPDIR:-/tmp}/agent-vault-ca.XXXXXX")"
+cleanup() {
+	rm -f "$ca_file"
+}
+trap cleanup EXIT HUP INT TERM
+
+cat >"$ca_file" <<'AGENT_VAULT_CA_PEM'
+{{CA_PEM}}
+AGENT_VAULT_CA_PEM
+chmod 600 "$ca_file"
+
+require_command() {
+	if ! command -v "$1" >/dev/null 2>&1; then
+		echo "agent-vault: required command not found: $1" >&2
+		exit 1
+	fi
+}
+
+certificate_sha256() {
+	openssl x509 -in "$1" -noout -fingerprint -sha256 |
+		sed 's/^.*=//; s/://g' |
+		tr '[:lower:]' '[:upper:]'
+}
+
+verify_embedded_certificate() {
+	actual_sha256="$(certificate_sha256 "$ca_file")"
+	if [ "$actual_sha256" != "$expected_sha256" ]; then
+		echo "agent-vault: embedded CA fingerprint mismatch" >&2
+		exit 1
+	fi
+}
+
+verify_system_trust() {
+	if ! security verify-cert -q -c "$ca_file" -p ssl; then
+		echo "agent-vault: CA $expected_sha256 is not trusted by Keychain for TLS" >&2
+		exit 1
+	fi
+	printf '%s\n' "agent-vault: verified CA $expected_sha256 in Keychain trust policy"
+}
+
+keychain_contains_certificate() {
+	security find-certificate -a -Z "$1" 2>/dev/null |
+		grep -Fq "$expected_sha256"
+}
+
+require_command openssl
+require_command security
+verify_embedded_certificate
+
+case "${1:-}" in
+	install-login)
+		if keychain_contains_certificate "$login_keychain"; then
+			printf '%s\n' "agent-vault: CA $expected_sha256 is already in the login keychain"
+		else
+			security add-trusted-cert -r trustRoot -k "$login_keychain" "$ca_file"
+		fi
+		verify_system_trust
+		;;
+	install-system)
+		if keychain_contains_certificate "$system_keychain"; then
+			printf '%s\n' "agent-vault: CA $expected_sha256 is already in the System keychain"
+		else
+			require_command sudo
+			sudo security add-trusted-cert -d -r trustRoot -k "$system_keychain" "$ca_file"
+		fi
+		verify_system_trust
+		;;
+	verify)
+		verify_system_trust
+		;;
+	remove-login)
+		if keychain_contains_certificate "$login_keychain"; then
+			security delete-certificate -Z "$expected_sha256" "$login_keychain"
+		else
+			printf '%s\n' "agent-vault: CA $expected_sha256 is already absent from the login keychain"
+			exit 0
+		fi
+		printf '%s\n' "agent-vault: removed CA $expected_sha256 from the login keychain"
+		;;
+	remove-system)
+		if keychain_contains_certificate "$system_keychain"; then
+			require_command sudo
+			sudo security delete-certificate -Z "$expected_sha256" "$system_keychain"
+		else
+			printf '%s\n' "agent-vault: CA $expected_sha256 is already absent from the System keychain"
+			exit 0
+		fi
+		printf '%s\n' "agent-vault: removed CA $expected_sha256 from the System keychain"
+		;;
+	*)
+		echo "Usage: $0 {install-login|install-system|verify|remove-login|remove-system}" >&2
+		echo "Review this script, then choose the login or System keychain scope explicitly." >&2
+		exit 2
+		;;
+esac
