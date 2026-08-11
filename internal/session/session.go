@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Infisical/agent-vault/internal/datadir"
 )
 
 // ClientSession holds the session token and server address for an authenticated client.
@@ -23,18 +25,14 @@ type ClientSession struct {
 }
 
 func sessionPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := datadir.Ensure()
 	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".agent-vault")
-	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "session.json"), nil
 }
 
-// Save persists the client session to ~/.agent-vault/session.json.
+// Save persists the client session to session.json in the configured data directory.
 func Save(sess *ClientSession) error {
 	path, err := sessionPath()
 	if err != nil {
@@ -47,7 +45,7 @@ func Save(sess *ClientSession) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-// Load reads the client session from ~/.agent-vault/session.json.
+// Load reads the client session from the configured data directory.
 // Returns nil, nil if the file does not exist.
 func Load() (*ClientSession, error) {
 	path, err := sessionPath()
@@ -82,18 +80,14 @@ func Clear() error {
 }
 
 func contextPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := datadir.Ensure()
 	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".agent-vault")
-	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "context"), nil
 }
 
-// SaveVaultContext persists the active vault name to ~/.agent-vault/context.
+// SaveVaultContext persists the active vault name to context in the configured data directory.
 func SaveVaultContext(vault string) error {
 	path, err := contextPath()
 	if err != nil {
@@ -102,7 +96,7 @@ func SaveVaultContext(vault string) error {
 	return os.WriteFile(path, []byte(vault), 0600)
 }
 
-// LoadVaultContext reads the active vault name from ~/.agent-vault/context.
+// LoadVaultContext reads the active vault name from the configured data directory.
 // Returns "" if the file does not exist.
 func LoadVaultContext() string {
 	path, err := contextPath()

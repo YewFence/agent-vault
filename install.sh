@@ -13,7 +13,7 @@ set -e
 
 REPO="Infisical/agent-vault"
 INSTALL_DIR="/usr/local/bin"
-DATA_DIR="$HOME/.agent-vault"
+DATA_DIR="${AGENT_VAULT_HOME:-$HOME/.agent-vault}"
 PID_FILE="$DATA_DIR/agent-vault.pid"
 DB_FILE="$DATA_DIR/agent-vault.db"
 

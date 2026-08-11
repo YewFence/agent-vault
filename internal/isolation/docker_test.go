@@ -312,6 +312,26 @@ func TestBuildRunArgs_RejectsCWDInsideAgentVaultDir(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgs_RejectsCWDInsideConfiguredDataDir(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	inside := filepath.Join(dataDir, "some-project")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := baseConfig(t)
+	cfg.WorkDir = inside
+	_, err := BuildRunArgs(cfg)
+	if err == nil {
+		t.Fatal("expected BuildRunArgs to reject a workdir inside AGENT_VAULT_HOME")
+	}
+	if !strings.Contains(err.Error(), dataDir) {
+		t.Fatalf("error %q does not identify configured data directory %q", err, dataDir)
+	}
+}
+
 func TestParseAndValidateMount_RejectReservedContainerDst(t *testing.T) {
 	tmp := t.TempDir()
 	home := t.TempDir()
@@ -382,7 +402,7 @@ func TestParseAndValidateMount_SymlinkLaunderingRejected(t *testing.T) {
 	if err := os.Symlink(vaultDir, link); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	_, err := parseAndValidateMount(link+":/data", home)
+	_, err := parseAndValidateMount(link+":/data", vaultDir)
 	if err == nil {
 		t.Fatal("expected rejection for symlink pointing into $HOME/.agent-vault")
 	}

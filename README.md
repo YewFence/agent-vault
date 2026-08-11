@@ -217,7 +217,7 @@ Want a full deployment walkthrough? See [Run Hermes on a VPS](https://docs.agent
 
 ## PostgreSQL (Production)
 
-By default Agent Vault stores all state in a local SQLite database, which requires no setup. For production deployments, or when running multiple instances, set the `DATABASE_URL` environment variable (or `--database-url` flag) to a PostgreSQL connection string and Agent Vault switches to Postgres as its backend. All instances share the same database, so state is consistent across replicas.
+By default Agent Vault stores all state in a local SQLite database under `~/.agent-vault`. Set `AGENT_VAULT_HOME` to use a different local data directory. For production deployments, or when running multiple instances, set the `DATABASE_URL` environment variable (or `--database-url` flag) to a PostgreSQL connection string and Agent Vault switches to Postgres as its backend. All instances share the same database, so state is consistent across replicas.
 
 Migrate existing data with `agent-vault migrate-db --to postgres://...` before switching. See the [PostgreSQL guide](https://docs.agent-vault.dev/self-hosting/postgres) for deployment examples (Kubernetes, Docker Compose), architecture notes, and operational details.
 

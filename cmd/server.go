@@ -20,6 +20,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/auth"
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/datadir"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/notify"
@@ -192,11 +193,11 @@ var serverCmd = &cobra.Command{
 
 // attachMITMIfEnabled initializes the CA and attaches a transparent MITM
 // proxy to srv when mitmPort > 0. The CA is loaded or created under the
-// standard ~/.agent-vault/ca/ directory, encrypted with the master key.
+// standard data-directory ca/ path, encrypted with the master key.
 //
 // CA init failures are non-fatal, matching the behavior for bind failures
 // in server.Start: since the MITM proxy is default-on, environments that
-// cannot create ~/.agent-vault/ca/ (read-only FS, containers without HOME,
+// cannot create the data-directory ca/ path (read-only FS, containers without HOME,
 // corrupted state) must still be able to run the core HTTP server.
 func attachMITMIfEnabled(srv *server.Server, host string, mitmPort int, masterKey []byte, db store.Store, maxRespBytes, maxReqBytes int64) error {
 	if mitmPort <= 0 {
@@ -717,11 +718,11 @@ func spawnDetached(cmd *cobra.Command, masterKey *auth.MasterKey, initialized bo
 }
 
 func serverLogPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := datadir.Path()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".agent-vault", "server.log"), nil
+	return filepath.Join(dir, "server.log"), nil
 }
 
 // --- Stop subcommand ---

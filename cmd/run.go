@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/datadir"
 	"github.com/Infisical/agent-vault/internal/isolation"
 	"github.com/Infisical/agent-vault/internal/session"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -73,7 +74,7 @@ config). HTTPS_PROXY and HTTP_PROXY both point at the same proxy URL — the
 listener accepts
 CONNECT for https:// upstreams and absolute-form forward-proxy requests
 for http:// on the same port. The root CA PEM is written to
-~/.agent-vault/mitm-ca.pem.
+the configured Agent Vault data directory as mitm-ca.pem.
 
 For every service substitution with an explicit env setting, the child also
 receives ENV=<placeholder> (e.g. GITHUB_TOKEN=github_pat_thisisaplaceholder00…0):
@@ -609,11 +610,11 @@ func augmentEnvWithMITM(env []string, addr, token, vault, caPath string) ([]stri
 	}
 
 	if caPath == "" {
-		home, err := os.UserHomeDir()
+		dataDir, err := datadir.Path()
 		if err != nil {
-			return env, 0, false, fmt.Errorf("resolve home dir: %w", err)
+			return env, 0, false, fmt.Errorf("resolve data dir: %w", err)
 		}
-		caPath = filepath.Join(home, ".agent-vault", "mitm-ca.pem")
+		caPath = filepath.Join(dataDir, "mitm-ca.pem")
 	}
 	if err := os.MkdirAll(filepath.Dir(caPath), 0o700); err != nil {
 		return env, 0, false, fmt.Errorf("create CA dir: %w", err)

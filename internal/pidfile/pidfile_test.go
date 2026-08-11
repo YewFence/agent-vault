@@ -69,6 +69,21 @@ func TestReadNotExist(t *testing.T) {
 	}
 }
 
+func TestPathUsesAgentVaultHome(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := Path()
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	want := filepath.Join(dataDir, fileName)
+	if got != want {
+		t.Fatalf("Path = %q, want %q", got, want)
+	}
+}
+
 func TestIsRunning(t *testing.T) {
 	// Current process should be running.
 	if !IsRunning(os.Getpid()) {

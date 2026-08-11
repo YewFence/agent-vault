@@ -61,7 +61,7 @@ KDF parameters are stored per user, so Agent Vault can upgrade hashing parameter
 
 Changing a password (`agent-vault account change-password` or `POST /v1/auth/change-password`) invalidates all existing sessions and issues a fresh token.
 
-User sessions are **long-lived but idle-expired**. A login is good for up to a year of activity; if a session goes 30 days without making a request, it is automatically rejected as expired. Active operators effectively never have to log in again, while a stolen `~/.agent-vault/session.json` that goes unused loses access in 30 days. Operators can view and revoke individual sessions with `agent-vault auth sessions list / revoke`, or invalidate every session at once via `account change-password`.
+User sessions are **long-lived but idle-expired**. A login is good for up to a year of activity; if a session goes 30 days without making a request, it is automatically rejected as expired. Active operators effectively never have to log in again, while a stolen `session.json` from the configured data directory (`~/.agent-vault` by default) that goes unused loses access in 30 days. Operators can view and revoke individual sessions with `agent-vault auth sessions list / revoke`, or invalidate every session at once via `account change-password`.
 
 ## Token model
 

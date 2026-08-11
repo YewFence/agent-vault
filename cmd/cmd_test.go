@@ -303,6 +303,21 @@ func TestServerSubcommandsRegistered(t *testing.T) {
 	}
 }
 
+func TestServerLogPathUsesAgentVaultHome(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := serverLogPath()
+	if err != nil {
+		t.Fatalf("serverLogPath: %v", err)
+	}
+	want := filepath.Join(dataDir, "server.log")
+	if got != want {
+		t.Fatalf("serverLogPath = %q, want %q", got, want)
+	}
+}
+
 // TestServerCmd_RefusesWhenPIDFileLive ensures the server command bails out
 // at the pre-flight stage when another live server already owns the PID file,
 // without prompting for a password and without touching the file.

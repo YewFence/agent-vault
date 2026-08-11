@@ -57,6 +57,21 @@ func TestWriteHostCAFile_RejectsNonHexSessionID(t *testing.T) {
 	}
 }
 
+func TestWriteHostCAFile_UsesAgentVaultHome(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	path, err := WriteHostCAFile([]byte("test"), "abcdef0123456789")
+	if err != nil {
+		t.Fatalf("WriteHostCAFile: %v", err)
+	}
+	want := filepath.Join(dataDir, isolationDirName, caPrefix+"abcdef0123456789"+caSuffix)
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+}
+
 func TestWriteHostCAFile_OverwriteIsSafe(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sid := "abcdef0123456789"

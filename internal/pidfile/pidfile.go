@@ -8,17 +8,19 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/Infisical/agent-vault/internal/datadir"
 )
 
 const fileName = "agent-vault.pid"
 
-// Path returns the path to the PID file (~/.agent-vault/agent-vault.pid).
+// Path returns the path to the PID file in the configured data directory.
 func Path() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := datadir.Path()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".agent-vault", fileName), nil
+	return filepath.Join(dir, fileName), nil
 }
 
 // ErrAlreadyRunning is returned by WriteIfFree when the PID file is already

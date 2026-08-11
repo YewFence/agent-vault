@@ -3,9 +3,10 @@ package store
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Infisical/agent-vault/internal/datadir"
 )
 
 // ErrNotFirstUser is returned by RegisterFirstUser when users already exist.
@@ -629,15 +630,11 @@ type Store interface {
 	DialectName() string
 }
 
-// DefaultDBPath returns the default path for the SQLite database file (~/.agent-vault/agent-vault.db).
-// It creates the ~/.agent-vault/ directory with 0700 permissions if it does not exist.
+// DefaultDBPath returns the path for the SQLite database file in the configured data directory.
+// It creates the data directory with 0700 permissions if it does not exist.
 func DefaultDBPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := datadir.Ensure()
 	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".agent-vault")
-	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "agent-vault.db"), nil

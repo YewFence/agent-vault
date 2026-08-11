@@ -89,7 +89,7 @@ agent-vault server --mitm-port 0 # disable
 HTTP/1.1 at the ingress (WebSocket upgrades over HTTP/1.1 are transparently brokered — useful for voice/realtime APIs like OpenAI Realtime). The terminator advertises only `http/1.1` in ALPN, so clients offering both `h2` and `http/1.1` fall back to `http/1.1` and have credentials injected normally; clients that strictly require `h2` fail the TLS handshake with a `no_application_protocol` alert.
 </Warning>
 
-A software-backed root CA is created on first launch under `~/.agent-vault/ca/` (private key encrypted with the DEK). Clients must trust this root before the proxied TLS handshake will succeed. On macOS and Linux, host-mode `agent-vault vault run` requires that CA in the native system trust store before it starts its child process.
+A software-backed root CA is created on first launch under the configured data directory (`~/.agent-vault/ca/` by default; override with `AGENT_VAULT_HOME`). Its private key is encrypted with the DEK. Clients must trust this root before the proxied TLS handshake will succeed. On macOS and Linux, host-mode `agent-vault vault run` requires that CA in the native system trust store before it starts its child process.
 
 Fetch the root certificate from any machine that can reach the server:
 

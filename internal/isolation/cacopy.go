@@ -7,10 +7,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Infisical/agent-vault/internal/datadir"
 )
 
 const (
-	// isolationDirName lives under ~/.agent-vault so ungraceful exits can
+	// isolationDirName lives under the data directory so ungraceful exits can
 	// be cleaned up by PruneHostCAFiles on the next run.
 	isolationDirName = "isolation"
 	caPrefix         = "ca-"
@@ -23,7 +25,7 @@ const (
 var sessionIDRE = regexp.MustCompile(`^[0-9a-f]+$`)
 
 // WriteHostCAFile writes the MITM CA cert to
-// ~/.agent-vault/isolation/ca-<sessionID>.pem with mode 0o644 (the
+// <data-dir>/isolation/ca-<sessionID>.pem with mode 0o644 (the
 // container's unprivileged claude user must read it via the bind
 // mount). The enclosing directory stays 0o700 so only the host user
 // and root can read the file on the host side.
@@ -53,7 +55,7 @@ func WriteHostCAFile(pem []byte, sessionID string) (string, error) {
 	return path, nil
 }
 
-// PruneHostCAFiles removes ca-*.pem files in ~/.agent-vault/isolation/
+// PruneHostCAFiles removes ca-*.pem files in <data-dir>/isolation/
 // older than caStaleTTL. Best-effort — errors are ignored because this
 // is background cleanup, not correctness-critical. Called at the top of
 // each container-mode vault run.
@@ -87,9 +89,9 @@ func PruneHostCAFiles() {
 }
 
 func hostIsolationDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := datadir.Path()
 	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
+		return "", fmt.Errorf("resolve data dir: %w", err)
 	}
-	return filepath.Join(home, ".agent-vault", isolationDirName), nil
+	return filepath.Join(dir, isolationDirName), nil
 }

@@ -249,6 +249,32 @@ func TestAugmentEnvWithMITM_Enabled(t *testing.T) {
 	}
 }
 
+func TestAugmentEnvWithMITM_UsesAgentVaultHome(t *testing.T) {
+	stubSystemCATrust(t)
+	const fakePEM = "-----BEGIN CERTIFICATE-----\nMIIFAKE\n-----END CERTIFICATE-----\n"
+	srv := fakeMITMServer(t, fakePEM, 9001)
+	defer srv.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	_, _, ok, err := augmentEnvWithMITM(nil, srv.URL, "av_sess_abc", "default", "")
+	if err != nil {
+		t.Fatalf("augmentEnvWithMITM: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true on 200")
+	}
+	got, err := os.ReadFile(filepath.Join(dataDir, "mitm-ca.pem"))
+	if err != nil {
+		t.Fatalf("reading CA file: %v", err)
+	}
+	if string(got) != fakePEM {
+		t.Fatalf("CA file contents = %q, want %q", got, fakePEM)
+	}
+}
+
 // TestAugmentEnvWithMITM_PortFallback verifies that a server which does
 // not advertise X-MITM-Port (e.g. pre-v0.8 build) is still usable — the
 // client falls back to DefaultMITMPort rather than emitting a URL with

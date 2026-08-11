@@ -57,6 +57,20 @@ func TestNew_FreshInit_WritesFilesWithExpectedPerms(t *testing.T) {
 	}
 }
 
+func TestNewUsesAgentVaultHomeByDefault(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	ca, err := New(testMasterKey(), Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if ca.dir != filepath.Join(dataDir, defaultDirName) {
+		t.Fatalf("CA dir = %q, want %q", ca.dir, filepath.Join(dataDir, defaultDirName))
+	}
+}
+
 func TestNew_Reload_YieldsSameRoot(t *testing.T) {
 	caDir := t.TempDir()
 	key := testMasterKey()

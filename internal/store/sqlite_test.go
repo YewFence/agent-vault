@@ -4,10 +4,50 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestDefaultDBPathUsesAgentVaultHome(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := DefaultDBPath()
+	if err != nil {
+		t.Fatalf("DefaultDBPath: %v", err)
+	}
+	want := filepath.Join(dataDir, "agent-vault.db")
+	if got != want {
+		t.Fatalf("DefaultDBPath = %q, want %q", got, want)
+	}
+	info, err := os.Stat(dataDir)
+	if err != nil {
+		t.Fatalf("Stat data directory: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("data directory permissions = %o, want 700", perm)
+	}
+}
+
+func TestOpenStoreCreatesSQLiteInAgentVaultHome(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	db, err := OpenStore(StoreConfig{})
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "agent-vault.db")); err != nil {
+		t.Fatalf("SQLite database was not created under AGENT_VAULT_HOME: %v", err)
+	}
+}
 
 func tp(t time.Time) *time.Time { return &t }
 
@@ -1449,7 +1489,6 @@ func TestCascadeDeleteVaultRemovesProposals(t *testing.T) {
 	}
 }
 
-
 // --- UUID ---
 
 func TestNewUUIDUniqueness(t *testing.T) {
@@ -1676,7 +1715,6 @@ func TestDeleteUserSessions(t *testing.T) {
 		t.Fatalf("expected sql.ErrNoRows after deleting user sessions, got %v", err)
 	}
 }
-
 
 func TestDeleteUserCascadesGrants(t *testing.T) {
 	s := openTestDB(t)
@@ -1954,7 +1992,6 @@ func TestGetSessionBackwardCompat(t *testing.T) {
 		t.Fatalf("expected empty agent_id for old session, got %q", fetched.AgentID)
 	}
 }
-
 
 func TestDeleteAgentTokens(t *testing.T) {
 	s := openTestDB(t)

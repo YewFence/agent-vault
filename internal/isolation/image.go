@@ -96,7 +96,7 @@ func assetsHash() (string, error) {
 }
 
 // unpackAssets writes the embedded files to
-// ~/.agent-vault/isolation/<hash>/ (idempotent) and returns the path.
+// <data-dir>/isolation/<hash>/ (idempotent) and returns the path.
 // Scripts are emitted 0o755 so docker build's COPY preserves mode.
 func unpackAssets(hash string) (string, error) {
 	dir, err := hostIsolationDir()

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Infisical/agent-vault/internal/datadir"
 )
 
 // Config describes everything BuildRunArgs needs to produce a fully
@@ -50,8 +52,8 @@ var reservedContainerDsts = []string{
 	ContainerClaudeConfig,
 }
 
-// BuildRunArgs produces the argv for `docker run …`. Pure apart from
-// os.UserHomeDir + filepath.EvalSymlinks on user --mount sources.
+// BuildRunArgs produces the argv for `docker run …`. Pure apart from resolving
+// the configured data directory and evaluating symlinks on user mount sources.
 func BuildRunArgs(cfg Config) ([]string, error) {
 	if cfg.ImageRef == "" {
 		return nil, errors.New("BuildRunArgs: ImageRef required")
@@ -72,25 +74,28 @@ func BuildRunArgs(cfg Config) ([]string, error) {
 		return nil, errors.New("BuildRunArgs: CommandArgs required")
 	}
 
-	home, _ := os.UserHomeDir()
+	dataDir, err := datadir.Path()
+	if err != nil {
+		return nil, fmt.Errorf("resolving data directory: %w", err)
+	}
 
 	// The CWD is bind-mounted read-write at /workspace. Subject it to
 	// the same host-src validation as user --mount flags so running
-	// `vault run --isolation=container` from inside ~/.agent-vault (which
+	// `vault run --isolation=container` from inside the data directory (which
 	// holds the encrypted CA key + vault database) does not expose
 	// that dir to the container.
 	resolvedWorkDir, err := filepath.EvalSymlinks(cfg.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolving workdir: %w", err)
 	}
-	if err := validateHostSrc(resolvedWorkDir, home); err != nil {
+	if err := validateHostSrc(resolvedWorkDir, dataDir); err != nil {
 		return nil, fmt.Errorf("workspace: %w", err)
 	}
 	cfg.WorkDir = resolvedWorkDir
 
 	parsed := make([]parsedMount, 0, len(cfg.Mounts))
 	for _, raw := range cfg.Mounts {
-		pm, err := parseAndValidateMount(raw, home)
+		pm, err := parseAndValidateMount(raw, dataDir)
 		if err != nil {
 			return nil, err
 		}
@@ -150,10 +155,10 @@ func BuildRunArgs(cfg Config) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolving HostAgentDir: %w", err)
 		}
-		// Same host-src validation as user --mount (reject ~/.agent-vault
+		// Same host-src validation as user --mount (reject the data directory
 		// and the docker socket), so a symlinked agent dir can't launder
 		// access to encrypted vault data.
-		if err := validateHostSrc(resolvedAgentDir, home); err != nil {
+		if err := validateHostSrc(resolvedAgentDir, dataDir); err != nil {
 			return nil, fmt.Errorf("HostAgentDir: %w", err)
 		}
 		args = append(args, "-v", resolvedAgentDir+":"+ContainerClaudeHome)
@@ -163,7 +168,7 @@ func BuildRunArgs(cfg Config) ([]string, error) {
 		// auto-creating a directory where Claude expects a file.
 		configPath := filepath.Join(filepath.Dir(resolvedAgentDir), ".claude.json")
 		if resolvedConfig, err := filepath.EvalSymlinks(configPath); err == nil {
-			if err := validateHostSrc(resolvedConfig, home); err != nil {
+			if err := validateHostSrc(resolvedConfig, dataDir); err != nil {
 				return nil, fmt.Errorf("HostAgentConfig: %w", err)
 			}
 			args = append(args, "-v", resolvedConfig+":"+ContainerClaudeConfig)
@@ -190,10 +195,10 @@ func BuildRunArgs(cfg Config) ([]string, error) {
 }
 
 // parseAndValidateMount parses a --mount "src:dst[:ro|rw]" value, resolves
-// symlinks on the host src, and rejects reserved paths. homeDir may be
-// empty (e.g. in tests without $HOME); the $HOME-based check is skipped
+// symlinks on the host src, and rejects reserved paths. dataDir may be
+// empty (e.g. when the directory cannot be resolved); its check is skipped
 // in that case.
-func parseAndValidateMount(raw, homeDir string) (parsedMount, error) {
+func parseAndValidateMount(raw, dataDir string) (parsedMount, error) {
 	parts := strings.Split(raw, ":")
 	if len(parts) < 2 || len(parts) > 3 {
 		return parsedMount{}, fmt.Errorf("--mount %q: want src:dst[:ro]", raw)
@@ -222,7 +227,7 @@ func parseAndValidateMount(raw, homeDir string) (parsedMount, error) {
 	if err != nil {
 		return parsedMount{}, fmt.Errorf("--mount %q: resolving src: %w", raw, err)
 	}
-	if err := validateHostSrc(resolved, homeDir); err != nil {
+	if err := validateHostSrc(resolved, dataDir); err != nil {
 		return parsedMount{}, err
 	}
 	if err := validateContainerDst(m.Dst); err != nil {
@@ -232,26 +237,25 @@ func parseAndValidateMount(raw, homeDir string) (parsedMount, error) {
 	return m, nil
 }
 
-func validateHostSrc(resolved, homeDir string) error {
+func validateHostSrc(resolved, dataDir string) error {
 	if resolved == "/" {
 		return errors.New("--mount: refusing to bind the host root filesystem")
 	}
 	if isDockerSocket(resolved) {
 		return errors.New("--mount: refusing to bind the docker socket (would undo every isolation guarantee)")
 	}
-	if homeDir != "" {
-		// Canonicalize homeDir so the prefix comparison is apples-to-apples
+	if dataDir != "" {
+		// Canonicalize dataDir so the prefix comparison is apples-to-apples
 		// with the already-EvalSymlinks'd resolved src. On macOS `/var` is a
 		// symlink to `/private/var`, and `$TMPDIR` lives under `/var/folders`,
 		// so without this the comparison silently misses.
-		canonicalHome := homeDir
-		if c, err := filepath.EvalSymlinks(homeDir); err == nil {
-			canonicalHome = c
+		canonicalDataDir := dataDir
+		if c, err := filepath.EvalSymlinks(dataDir); err == nil {
+			canonicalDataDir = c
 		}
-		vaultDir := filepath.Join(canonicalHome, ".agent-vault")
 		sep := string(os.PathSeparator)
-		if resolved == vaultDir || strings.HasPrefix(resolved, vaultDir+sep) || strings.HasPrefix(vaultDir, resolved+sep) {
-			return fmt.Errorf("--mount: refusing to bind inside %s (contains master-key-encrypted vault data)", filepath.Join(homeDir, ".agent-vault"))
+		if resolved == canonicalDataDir || strings.HasPrefix(resolved, canonicalDataDir+sep) || strings.HasPrefix(canonicalDataDir, resolved+sep) {
+			return fmt.Errorf("--mount: refusing to bind inside %s (contains master-key-encrypted vault data)", dataDir)
 		}
 	}
 	return nil

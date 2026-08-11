@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/datadir"
 )
 
 const (
@@ -54,7 +55,7 @@ type CAStateRecord struct {
 
 // Options configures a SoftCA. Zero values pick sensible defaults.
 type Options struct {
-	Dir       string           // default: ~/.agent-vault/ca (ignored when Store is set)
+	Dir       string           // default: <data-dir>/ca (ignored when Store is set)
 	LeafTTL   time.Duration    // default: 24h
 	CacheSize int              // default: 1024
 	Clock     func() time.Time // default: time.Now
@@ -149,11 +150,11 @@ func New(masterKey []byte, opts Options) (*SoftCA, error) {
 
 	dir := opts.Dir
 	if dir == "" {
-		home, err := os.UserHomeDir()
+		dataDir, err := datadir.Path()
 		if err != nil {
-			return nil, fmt.Errorf("resolving home dir: %w", err)
+			return nil, fmt.Errorf("resolving data dir: %w", err)
 		}
-		dir = filepath.Join(home, ".agent-vault", defaultDirName)
+		dir = filepath.Join(dataDir, defaultDirName)
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("creating ca dir: %w", err)

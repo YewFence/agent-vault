@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/Infisical/agent-vault/internal/datadir"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -32,6 +32,10 @@ it will be stopped automatically before the reset.`,
 		}
 
 		yes, _ := cmd.Flags().GetBool("yes")
+		dataDir, err := datadir.Path()
+		if err != nil {
+			return fmt.Errorf("resolving data directory: %w", err)
+		}
 
 		// 1. Load session
 		sess, err := ensureSession()
@@ -59,6 +63,7 @@ it will be stopped automatically before the reset.`,
 		// 3. Confirm
 		if !yes {
 			fmt.Fprintln(cmd.OutOrStderr(), warningText("WARNING")+": This will permanently delete all data including users, credentials, services, proposals, and vaults.")
+			fmt.Fprintf(cmd.OutOrStderr(), "Data directory: %s\n", dataDir)
 			fmt.Fprintf(cmd.OutOrStderr(), "Type %q to confirm: ", "reset")
 			reader := bufio.NewReader(os.Stdin)
 			answer, err := reader.ReadString('\n')
@@ -100,9 +105,8 @@ it will be stopped automatically before the reset.`,
 			}
 		}
 
-		// 6. Remove the entire data directory (~/.agent-vault/).
+		// 6. Remove the entire configured data directory.
 		//    This covers the database, CA keys, backups, session, logs, and PID file.
-		dataDir := filepath.Dir(dbPath)
 		if err := os.RemoveAll(dataDir); err != nil {
 			return fmt.Errorf("removing data directory: %w", err)
 		}

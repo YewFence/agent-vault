@@ -35,7 +35,7 @@ files and PostgreSQL's database-backed CA state.`,
 func init() {
 	migrateDBCmd.Flags().String("to", "", "destination PostgreSQL URL or SQLite database path (required)")
 	migrateDBCmd.Flags().Bool("dry-run", false, "count rows per table without copying anything")
-	migrateDBCmd.Flags().String("from", "", "source PostgreSQL URL or SQLite database path (default: ~/.agent-vault/agent-vault.db)")
+	migrateDBCmd.Flags().String("from", "", "source PostgreSQL URL or SQLite database path (default: agent-vault.db in the configured data directory)")
 	migrateDBCmd.Flags().BoolP("yes", "y", false, "skip confirmation prompt (for scripted/CI usage)")
 	_ = migrateDBCmd.MarkFlagRequired("to")
 	rootCmd.AddCommand(migrateDBCmd)

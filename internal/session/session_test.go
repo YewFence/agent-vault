@@ -91,3 +91,17 @@ func TestClearNonExistent(t *testing.T) {
 		t.Fatalf("Clear on non-existent file: %v", err)
 	}
 }
+
+func TestSaveUsesAgentVaultHome(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AGENT_VAULT_HOME", dataDir)
+	t.Setenv("HOME", t.TempDir())
+
+	sess := &ClientSession{Token: "custom-home", Address: "http://localhost:14321"}
+	if err := Save(sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "session.json")); err != nil {
+		t.Fatalf("session was not written under AGENT_VAULT_HOME: %v", err)
+	}
+}
