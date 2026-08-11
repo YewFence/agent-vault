@@ -1,30 +1,41 @@
-# ---- Frontend build ----
-FROM node:26-alpine@sha256:e88a35be04478413b7c71c455cd9865de9b9360e1f43456be5951032d7ac1a66 AS frontend
+FROM debian:13-slim AS builder
 
-WORKDIR /app
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web/ .
-RUN npm run build
+RUN apt-get update  \
+    && apt-get -y --no-install-recommends install  \
+        # install any other dependencies you might need
+        sudo curl git ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# ---- Go build stage ----
-FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV MISE_DATA_DIR="/mise"
+ENV MISE_CONFIG_DIR="/mise"
+ENV MISE_CACHE_DIR="/mise/cache"
+ENV MISE_INSTALL_PATH="/usr/local/bin/mise"
+ENV PATH="/mise/shims:$PATH"
+
+RUN curl https://mise.run | sh
+
+WORKDIR /src
+COPY mise.toml mise.lock ./
+ENV MISE_LOCKED="1"
+ENV MISE_SAFE="1"
+RUN mise install
+
+COPY web/package.json web/package-lock.json ./web/
+RUN aube -C web ci
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN aube -C web run build
 
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
-ARG POSTHOG_API_KEY=
 
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-COPY --from=frontend /internal/server/webdist /src/internal/server/webdist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w \
     -X github.com/Infisical/agent-vault/cmd.version=${VERSION} \
     -X github.com/Infisical/agent-vault/cmd.commit=${COMMIT} \
-    -X github.com/Infisical/agent-vault/cmd.date=${BUILD_DATE} \
-    -X github.com/Infisical/agent-vault/cmd.posthogAPIKey=${POSTHOG_API_KEY}" \
+    -X github.com/Infisical/agent-vault/cmd.date=${BUILD_DATE}" \
     -o /agent-vault .
 
 # ---- Runtime stage ----

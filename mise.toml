@@ -1,0 +1,41 @@
+[env]
+AGENT_VAULT_PORT = 14321
+AGENT_VAULT_MIIM_PORT = 14322
+AGENT_VAULT_TELEMETRY=false
+AGENT_VAULT_HOME="$PWD/dev"
+
+[tasks."dev:setup"]
+description = "Install the web development dependencies"
+run = "aube -C web ci"
+
+[tasks."dev:api"]
+description = "Run an isolated Agent Vault API with Go hot reload"
+run = '''
+AGENT_VAULT_ADDR=http://127.0.0.1:$AGENT_VAULT_PORT \
+air -- server --port $AGENT_VAULT_PORT --mitm-port $AGENT_VAULT_MIIM_PORT
+'''
+
+[tasks."dev:web"]
+description = "Run the Vite frontend for the isolated development API on :5174"
+env = { VITE_API_URL = "http://127.0.0.1:$AGENT_VAULT_PORT" }
+run = "aube -C web run dev -- --port 5174"
+
+[tasks.dev]
+description = "Run the isolated Agent Vault API and Vite frontend together"
+run = [{ tasks = ["dev:api", "dev:web"] }]
+
+[tasks.install]
+description = "Install it from source code to my dev machine via mise link"
+run = """
+go build -trimpath -o ./bin/agent-vault
+mise link github:infisical/agent-vault@dev "$PWD/bin"
+mise use --global github:infisical/agent-vault@dev
+mkdir -p $HOME/.config/agent-vault
+"""
+
+[tools]
+air = "latest"
+aube = "latest"
+go = "latest"
+golangci-lint = "latest"
+node = "latest"
