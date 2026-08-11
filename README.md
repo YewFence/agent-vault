@@ -131,7 +131,7 @@ AGENT_VAULT_VAULT=<vault-in-agent-vault>
 ANTHROPIC_API_KEY=__anthropic_api_key__ // dummy key that will be substituted by Agent Vault
 ```
 
-`agent-vault run` injects a placeholder variable only when the substitution explicitly configures `env`; it uses that exact name and scrubs any parent value for it first. Without `env`, set the placeholder in the agent's environment yourself as shown above. Credential-shaped placeholders like `sk-ant-thisisaplaceholder00…0` — matching the real key's prefix and length — are recommended when the agent or its SDK validates the credential format.
+`agent-vault run` injects a placeholder variable only when the substitution explicitly configures `env`; it uses that exact name and scrubs any parent value for it first. Without `env`, set the placeholder in the agent's environment yourself as shown above. Credential-shaped placeholders like `sk-ant-thisisaplaceholder00…0` — matching the real key's prefix and length — are recommended when the agent or its SDK validates the credential format. Generate one interactively from a real key with `agent-vault placeholders generate`.
 
 5. [Install](https://docs.agent-vault.dev/installation) the Agent Vault CLI into your agent's environment and run the Agent Vault CLI with your agent to start proxying requests through Agent Vault.
 

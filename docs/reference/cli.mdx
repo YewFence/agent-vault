@@ -421,6 +421,20 @@ description: "Complete reference for all Agent Vault CLI commands."
     ```
   </Accordion>
 
+  <Accordion title="agent-vault placeholders generate">
+    ```bash
+    agent-vault placeholders generate
+    ```
+
+    Interactively mask a real API key or token into a credential-shaped placeholder of the same length: vendor prefix + `thisisaplaceholder` + zero padding. The credential is read with hidden input and never leaves the terminal — no server connection, session, or vault is needed. The prefix prompt is prefilled with the longest matching catalog prefix (pasting an `sk-or-…` key suggests `sk-or-`); accept it or type your own.
+
+    Standard output contains only the placeholder, so it is safe to capture with command substitution; notes and warnings go to stderr.
+
+    ```bash
+    GITHUB_TOKEN_PLACEHOLDER=$(agent-vault placeholders generate)
+    ```
+  </Accordion>
+
   <Accordion title="agent-vault vault token">
     ```bash
     agent-vault vault token [flags]
