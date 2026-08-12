@@ -28,13 +28,13 @@ make docker       # Multi-stage Docker image; data persisted at /data/.agent-vau
   - Instance role: `no-access` < `member` < `owner` (applies to both users and agents). `no-access` actors can authenticate and operate inside vaults they're granted to, but cannot create vaults, issue invites, or list other actors at the instance scope.
   - Vault role: `proxy` < `member` < `admin`. Proxy can use the proxy and raise proposals; member can manage credentials/services; admin can invite humans.
 - **KEK/DEK key wrapping**: A random DEK (Data Encryption Key) encrypts credentials and the CA key at rest (AES-256-GCM). If a master password is set, Argon2id derives a KEK (Key Encryption Key) that wraps the DEK; changing the password re-wraps the DEK without re-encrypting credentials. If no password is set (passwordless mode), the DEK is stored in plaintext — suitable for PaaS deploys where volume security is the trust boundary. Login uses email+password. The first user to register becomes the instance owner and is auto-granted vault admin on `default`.
-- **Agent skill is the agent-facing contract.** [cmd/skill_cli.md](cmd/skill_cli.md) is embedded into the binary, installed by `vault run`, and served publicly at `/v1/skills/cli`. It teaches agents how to create proposals when API access is needed.
+- **Agent skill is the agent-facing contract.** [skills/agent-vault-cli/](skills/agent-vault-cli/) is embedded into the binary, installed by `vault run`, and served publicly under `/v1/skills/agent-vault-cli/`. `SKILL.md` covers the proxy model and failure handling; proposal operations live in an on-demand reference.
 - **Dual database backend (SQLite / Postgres)**: By default, all state lives in a single SQLite file (`~/.agent-vault/agent-vault.db` or `/data/.agent-vault/agent-vault.db` in Docker). Setting `DATABASE_URL` (or `--database-url`) switches the backend to PostgreSQL for production deployments or running multiple instances. The `store.Dialect` interface abstracts SQL differences; SQLite and Postgres implementations live in `internal/store/`. Schema migrations are Go files in `internal/store/` (e.g. `001_init.go`, `20260617143022_postgres_baseline.go`) that self-register via `init()` and `RegisterGORMMigration`. Each migration contains both dialect blocks in one file. The CA private key is stored in the database (not on disk) in Postgres mode so all instances share it. `agent-vault migrate-db` copies data from SQLite to Postgres for existing deployments. `master-password` CLI commands are blocked when `DATABASE_URL` is set (use `--force` after stopping all instances).
 - **Two isolation modes for `vault run`** (selected via `--isolation` or `AGENT_VAULT_ISOLATION`): `host` (default, cooperative — fork+exec on the host with `HTTPS_PROXY`/`HTTP_PROXY` envvars) and `container` (non-cooperative — Docker container with iptables egress locked to the Agent Vault proxy). Container mode lives in [internal/isolation/](internal/isolation/) with an embedded Dockerfile + init-firewall.sh + entrypoint.sh, built on first use and cached by content hash.
 
 ## Where to look for details
 
-- **CLI surface** — `./agent-vault --help` (recursive on every subcommand) + [cmd/skill_cli.md](cmd/skill_cli.md).
+- **CLI surface** — `./agent-vault --help` (recursive on every subcommand) + [skills/agent-vault-cli/](skills/agent-vault-cli/).
 - **HTTP API surface** — handlers under [internal/server/](internal/server/).
 - **Types & validation** — broker service/auth shapes in [internal/broker/](internal/broker/); proposal shapes in [internal/proposal/](internal/proposal/).
 - **User-facing operator docs** — [README.md](README.md).
@@ -44,7 +44,7 @@ make docker       # Multi-stage Docker image; data persisted at /data/.agent-vau
 
 ## Conventions
 
-- When the agent-facing surface changes (endpoints, request/response fields, auth behavior), update [cmd/skill_cli.md](cmd/skill_cli.md).
+- When the agent-facing surface changes (endpoints, request/response fields, auth behavior), update [skills/agent-vault-cli/](skills/agent-vault-cli/).
 - When adding or consuming an environment variable (even platform-injected ones like `PORT` or `FLY_APP_NAME`), update [.env.example](.env.example), [docs/self-hosting/environment-variables.mdx](docs/self-hosting/environment-variables.mdx), **and** the env-var table in [docs/reference/cli.mdx](docs/reference/cli.mdx). If it changes fallback behavior of an existing variable, update that variable's description too.
 - When adding or changing a CLI flag, update the flag table in [docs/reference/cli.mdx](docs/reference/cli.mdx) for the affected command.
 - When a change affects operator-facing behavior, update [README.md](README.md).

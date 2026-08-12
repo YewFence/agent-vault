@@ -59,18 +59,17 @@ type agentVaultJSON struct {
 
 // Server is the Agent Vault HTTP server.
 type Server struct {
-	httpServer  *http.Server
-	store       Store
-	encKey      []byte // 32-byte encryption key, held in memory while running
-	notifier    *notify.Notifier
-	initialized    bool                // true when at least one owner account exists
-	lastInitCheck  atomic.Int64        // unix-millis of last DB check for initialization (throttle)
-	baseURL     string              // externally-reachable base URL (e.g. "https://sb.example.com")
-	skillCLI    []byte              // embedded CLI skill content (served at GET /v1/skills/cli)
-	mitm        *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
-	logger      *slog.Logger        // structured logger for per-request observability
-	rateLimit   *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
-	logSink     requestlog.Sink     // per-request persistence sink; never nil (Nop default)
+	httpServer    *http.Server
+	store         Store
+	encKey        []byte // 32-byte encryption key, held in memory while running
+	notifier      *notify.Notifier
+	initialized   bool                // true when at least one owner account exists
+	lastInitCheck atomic.Int64        // unix-millis of last DB check for initialization (throttle)
+	baseURL       string              // externally-reachable base URL (e.g. "https://sb.example.com")
+	mitm          *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
+	logger        *slog.Logger        // structured logger for per-request observability
+	rateLimit     *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
+	logSink       requestlog.Sink     // per-request persistence sink; never nil (Nop default)
 	// touchCache short-circuits per-request session-touch writes. With
 	// db.SetMaxOpenConns(1), every UPDATE — even a no-op — opens the
 	// single WAL writer slot. Caching the last-touch wall-clock per
@@ -902,7 +901,8 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	// punish `vault run` (CA fetch per invocation) and the dashboard
 	// (re-mount poll) without defending any real surface.
 	mux.HandleFunc("GET /v1/service-catalog", s.requireInitialized(s.handleServiceCatalog))
-	mux.HandleFunc("GET /v1/skills/cli", s.requireInitialized(s.handleSkillCLI))
+	mux.HandleFunc("GET /v1/skills/agent-vault-cli/SKILL.md", s.requireInitialized(s.handleSkillFile("SKILL.md")))
+	mux.HandleFunc("GET /v1/skills/agent-vault-cli/references/proposals.md", s.requireInitialized(s.handleSkillFile("references/proposals.md")))
 	// CA PEM is not wrapped in requireInitialized — the CA lifecycle is
 	// tied to --mitm-port, not owner registration.
 	mux.HandleFunc("GET /v1/mitm/ca.pem", s.handleMITMCA)

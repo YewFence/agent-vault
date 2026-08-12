@@ -131,6 +131,7 @@ func BuildContainerEnv(token, vault string, httpPort, mitmPort int) []string {
 		"DENO_CERT="+ContainerSystemCAPath,
 	)
 	return append(env,
+		"AGENT_VAULT_ACTIVE=true",
 		"AGENT_VAULT_TOKEN="+token,
 		"AGENT_VAULT_ADDR="+fmt.Sprintf("http://%s:%d", ContainerProxyHost, httpPort),
 		"AGENT_VAULT_VAULT="+vault,

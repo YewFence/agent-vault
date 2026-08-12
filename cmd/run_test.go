@@ -60,6 +60,26 @@ func TestTopLevelRunRegistered(t *testing.T) {
 	}
 }
 
+func TestMaybeInstallSkillsInstallsCompleteSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	maybeInstallSkills("Test Agent", ".test-agent")
+
+	for path, marker := range map[string]string{
+		filepath.Join(home, ".test-agent", "skills", "agent-vault-cli", "SKILL.md"):                   "# Agent Vault",
+		filepath.Join(home, ".test-agent", "skills", "agent-vault-cli", "references", "proposals.md"): "# Proposals",
+	} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading installed skill file %s: %v", path, err)
+		}
+		if !strings.Contains(string(content), marker) {
+			t.Errorf("installed skill file %s does not contain %q", path, marker)
+		}
+	}
+}
+
 func TestAugmentEnvWithMITM_Disabled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/mitm/ca.pem" {
@@ -448,6 +468,7 @@ func TestResolveVaultForAgentMode(t *testing.T) {
 // dangerously, --vault would be overridden by a stale AGENT_VAULT_VAULT.
 func TestStripEnvKeys_AgentVaultInjectedKeys(t *testing.T) {
 	parent := []string{
+		"AGENT_VAULT_ACTIVE=false",
 		"AGENT_VAULT_TOKEN=stale-tok",
 		"AGENT_VAULT_ADDR=https://stale.example/",
 		"AGENT_VAULT_VAULT=stale-vault",
@@ -465,6 +486,16 @@ func TestStripEnvKeys_AgentVaultInjectedKeys(t *testing.T) {
 	}
 	if !contains(stripped, "UNRELATED=keep-me") {
 		t.Error("unrelated parent env vars must be preserved")
+	}
+}
+
+func TestBuildAgentVaultEnvMarksChildActive(t *testing.T) {
+	vars := envMap(buildAgentVaultEnv("tok", "https://vault.example", "prod"))
+	if vars["AGENT_VAULT_ACTIVE"] != "true" {
+		t.Errorf("AGENT_VAULT_ACTIVE = %q, want true", vars["AGENT_VAULT_ACTIVE"])
+	}
+	if vars["AGENT_VAULT_TOKEN"] != "tok" || vars["AGENT_VAULT_ADDR"] != "https://vault.example" || vars["AGENT_VAULT_VAULT"] != "prod" {
+		t.Errorf("unexpected Agent Vault child env: %#v", vars)
 	}
 }
 

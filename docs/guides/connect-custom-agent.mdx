@@ -24,7 +24,7 @@ If you're using Claude Code, Cursor, or another supported agent, see the [Quicks
     agent-vault vault run -- my-agent
     ```
 
-    `vault run` sets `AGENT_VAULT_ADDR`, `AGENT_VAULT_TOKEN`, and `AGENT_VAULT_VAULT` on the child, then pre-configures `HTTPS_PROXY`/`HTTP_PROXY` and the CA trust chain so standard HTTP clients route both HTTP and HTTPS traffic through the broker transparently.
+    `vault run` sets `AGENT_VAULT_ACTIVE=true`, `AGENT_VAULT_ADDR`, `AGENT_VAULT_TOKEN`, and `AGENT_VAULT_VAULT` on the child, then pre-configures `HTTPS_PROXY`/`HTTP_PROXY` and the CA trust chain so standard HTTP clients route both HTTP and HTTPS traffic through the broker transparently.
   </Tab>
   <Tab title="agent create">
     For CI pipelines, cloud-hosted agents, or any agent that lives outside `vault run`:
@@ -59,6 +59,7 @@ When the agent is launched via `vault run`, these additional variables are also 
 
 | Variable | Purpose |
 |---|---|
+| `AGENT_VAULT_ACTIVE` | Set to `true` to identify a process launched by `agent-vault vault run` |
 | `HTTPS_PROXY`, `https_proxy` | Route HTTPS traffic through the transparent proxy (CONNECT) |
 | `HTTP_PROXY`, `http_proxy` | Same URL as `HTTPS_PROXY` — plain `http://` upstreams route through the same listener via absolute-form forward-proxy requests |
 | `NO_PROXY`, `no_proxy` | Include `localhost`, `127.0.0.1`, and the Agent Vault control-plane hostname so agent-to-vault traffic skips the proxy |

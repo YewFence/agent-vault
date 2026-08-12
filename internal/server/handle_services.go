@@ -10,6 +10,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/catalog"
 	"github.com/Infisical/agent-vault/internal/proposal"
+	skillassets "github.com/Infisical/agent-vault/skills"
 )
 
 // rejectDeprecatedDescription returns the index of the first services
@@ -698,20 +699,14 @@ func (s *Server) handleServiceCatalog(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"services": catalog.GetAll()})
 }
 
-// SetSkills sets the embedded skill content.
-func (s *Server) SetSkills(cli string) {
-	s.skillCLI = []byte(cli)
-}
-
-func (s *Server) handleSkillCLI(w http.ResponseWriter, r *http.Request) {
-	s.serveSkill(w, r, s.skillCLI)
-}
-
-func (s *Server) serveSkill(w http.ResponseWriter, r *http.Request, content []byte) {
-	if len(content) == 0 {
-		http.NotFound(w, r)
-		return
+func (s *Server) handleSkillFile(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		content, err := skillassets.ReadFile(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write(content)
 	}
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	_, _ = w.Write(content)
 }

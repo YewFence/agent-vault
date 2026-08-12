@@ -28,6 +28,37 @@ import (
 // tp is an alias for timePtr (defined in server.go, same package).
 var tp = timePtr
 
+func TestSkillRoutes(t *testing.T) {
+	srv := newTestServer()
+
+	for path, marker := range map[string]string{
+		"/v1/skills/agent-vault-cli/SKILL.md":                "# Agent Vault",
+		"/v1/skills/agent-vault-cli/references/proposals.md": "# Proposals",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s status = %d, want %d", path, rec.Code, http.StatusOK)
+			continue
+		}
+		if got := rec.Header().Get("Content-Type"); got != "text/markdown; charset=utf-8" {
+			t.Errorf("GET %s Content-Type = %q", path, got)
+		}
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Errorf("GET %s body does not contain %q", path, marker)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/skills/cli", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("legacy skill route status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 // mockStore implements Store for testing.
 type mockStore struct {
 	masterKeyRecord    *store.MasterKeyRecord
@@ -389,9 +420,9 @@ func (m *mockStore) ExpirePendingProposals(_ context.Context, before time.Time) 
 	return 0, nil
 }
 
-func (m *mockStore) Close() error                                     { return nil }
-func (m *mockStore) Ping(_ context.Context) error                      { return nil }
-func (m *mockStore) DialectName() string                               { return "sqlite" }
+func (m *mockStore) Close() error                                         { return nil }
+func (m *mockStore) Ping(_ context.Context) error                         { return nil }
+func (m *mockStore) DialectName() string                                  { return "sqlite" }
 func (m *mockStore) GetCAState(_ context.Context) (*store.CAState, error) { return nil, nil }
 func (m *mockStore) SetCAState(_ context.Context, _ *store.CAState) error { return nil }
 

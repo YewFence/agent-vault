@@ -70,6 +70,9 @@ func TestBuildContainerEnv_AgentVaultAddrUsesContainerHost(t *testing.T) {
 	if vars["AGENT_VAULT_TOKEN"] != "tok" {
 		t.Errorf("AGENT_VAULT_TOKEN = %q", vars["AGENT_VAULT_TOKEN"])
 	}
+	if vars["AGENT_VAULT_ACTIVE"] != "true" {
+		t.Errorf("AGENT_VAULT_ACTIVE = %q, want true", vars["AGENT_VAULT_ACTIVE"])
+	}
 	if vars["AGENT_VAULT_VAULT"] != "v" {
 		t.Errorf("vault = %q", vars["AGENT_VAULT_VAULT"])
 	}

@@ -3,7 +3,7 @@ title: "Agent protocol"
 description: "How agents authenticate, discover services, route requests through HTTPS_PROXY/HTTP_PROXY, and propose changes through Agent Vault."
 ---
 
-Agent Vault agents follow a standard HTTP protocol to interact with the server. Agents handle this automatically — the canonical reference lives in the [agent skill file](https://github.com/Infisical/agent-vault/blob/main/cmd/skill_cli.md), also served at `/v1/skills/cli`. This page is a reference for understanding what happens under the hood.
+Agent Vault agents follow a standard HTTP protocol to interact with the server. Agents handle this automatically — the canonical reference lives in the [agent skill directory](https://github.com/Infisical/agent-vault/tree/main/skills/agent-vault-cli). Its main instructions are also served at `/v1/skills/agent-vault-cli/SKILL.md`, with proposal instructions at `/v1/skills/agent-vault-cli/references/proposals.md`. This page is a reference for understanding what happens under the hood.
 
 <Warning>
 Agents must never extract, log, or display credential values. They reference credentials by key name only.
@@ -24,6 +24,9 @@ Both methods deliver the same core connection details:
 |---|---|
 | `AGENT_VAULT_ADDR` | Base URL of the Agent Vault server (e.g. `http://127.0.0.1:14321`) |
 | `AGENT_VAULT_TOKEN` | Bearer token for all Agent Vault requests. |
+
+When `agent-vault vault run` starts the agent process, it additionally sets
+`AGENT_VAULT_ACTIVE=true` to identify the Agent Vault-managed runtime.
 
 ### Session types
 

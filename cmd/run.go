@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,12 +24,10 @@ import (
 	"github.com/Infisical/agent-vault/internal/session"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/Infisical/agent-vault/internal/telemetry"
+	skillassets "github.com/Infisical/agent-vault/skills"
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 )
-
-//go:embed skill_cli.md
-var skillCLI string
 
 // newRunCmd is called twice — for `vault run` and top-level `run` — so each
 // command gets its own pflag state. examplePrefix parameterizes the Example
@@ -53,6 +52,7 @@ Two modes:
     is fixed at mint time).
 
 Environment variables set on the child:
+  AGENT_VAULT_ACTIVE — set to true when this process is started by Agent Vault
   AGENT_VAULT_TOKEN  — bearer token for the Agent Vault server
   AGENT_VAULT_ADDR   — base URL of the Agent Vault HTTP control server
   AGENT_VAULT_VAULT  — vault the session is scoped to
@@ -201,11 +201,7 @@ func runCmdRunE(cmd *cobra.Command, args []string) error {
 	//    keys (that's how agent mode is detected).
 	env := os.Environ()
 	env = stripEnvKeys(env, agentVaultInjectedKeys)
-	env = append(env,
-		"AGENT_VAULT_TOKEN="+token,
-		"AGENT_VAULT_ADDR="+addr,
-		"AGENT_VAULT_VAULT="+vault,
-	)
+	env = append(env, buildAgentVaultEnv(token, addr, vault)...)
 
 	// 5b. Inject credential-shaped placeholders for substitution services
 	//     (GITHUB_TOKEN=github_pat_thisisaplaceholder00…0): the agent gets
@@ -280,9 +276,8 @@ func agentSkillDir(cmd string) (agentName, baseDir string, ok bool) {
 	return "", "", false
 }
 
-// maybeInstallSkills installs both Agent Vault skills (CLI and HTTP) under
-// ~/{baseDir}/skills/ if either is missing, prompting the user once for
-// confirmation. agentName is used in user-facing messages (e.g. "Claude Code").
+// maybeInstallSkills installs the Agent Vault skill under ~/{baseDir}/skills/.
+// agentName is used in user-facing messages (e.g. "Claude Code").
 func maybeInstallSkills(agentName, baseDir string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -291,20 +286,39 @@ func maybeInstallSkills(agentName, baseDir string) {
 
 	type skillEntry struct {
 		relPath string
-		content string
+		content []byte
 	}
-	skills := []skillEntry{
-		{filepath.Join(baseDir, "skills", "agent-vault-cli", "SKILL.md"), skillCLI},
+	var skillFiles []skillEntry
+	err = fs.WalkDir(skillassets.Content(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		content, readErr := skillassets.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		skillFiles = append(skillFiles, skillEntry{
+			relPath: filepath.Join(baseDir, "skills", skillassets.AgentVaultCLI, filepath.FromSlash(path)),
+			content: content,
+		})
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not read embedded Agent Vault skill: %v\n", err)
+		return
 	}
 
 	// Install or update skills whose on-disk content differs from the
 	// embedded version. This keeps skills current after agent-vault
 	// upgrades without requiring manual deletion.
 	var stale []skillEntry
-	for _, s := range skills {
+	for _, s := range skillFiles {
 		fullPath := filepath.Join(home, s.relPath)
 		existing, err := os.ReadFile(fullPath)
-		if err != nil || !bytes.Equal(existing, []byte(s.content)) {
+		if err != nil || !bytes.Equal(existing, s.content) {
 			stale = append(stale, s)
 		}
 	}
@@ -319,7 +333,7 @@ func maybeInstallSkills(agentName, baseDir string) {
 			fmt.Fprintf(os.Stderr, "Warning: could not create skill directory: %v\n", err)
 			continue
 		}
-		if err := os.WriteFile(fullPath, []byte(s.content), 0o600); err != nil {
+		if err := os.WriteFile(fullPath, s.content, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not write skill file: %v\n", err)
 			continue
 		}
@@ -507,9 +521,19 @@ var mitmInjectedKeys = func() map[string]struct{} {
 // AGENT_VAULT_VAULT from the parent shell would silently override the value
 // we just resolved from --vault.
 var agentVaultInjectedKeys = map[string]struct{}{
-	"AGENT_VAULT_TOKEN": {},
-	"AGENT_VAULT_ADDR":  {},
-	"AGENT_VAULT_VAULT": {},
+	"AGENT_VAULT_ACTIVE": {},
+	"AGENT_VAULT_TOKEN":  {},
+	"AGENT_VAULT_ADDR":   {},
+	"AGENT_VAULT_VAULT":  {},
+}
+
+func buildAgentVaultEnv(token, addr, vault string) []string {
+	return []string{
+		"AGENT_VAULT_ACTIVE=true",
+		"AGENT_VAULT_TOKEN=" + token,
+		"AGENT_VAULT_ADDR=" + addr,
+		"AGENT_VAULT_VAULT=" + vault,
+	}
 }
 
 // stripEnvKeys returns env with every entry whose key (the part before
