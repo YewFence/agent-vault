@@ -266,6 +266,7 @@ type Store interface {
 	CreateUserSession(ctx context.Context, p store.CreateUserSessionParams) (*store.Session, error)
 	CreateScopedSession(ctx context.Context, p store.CreateScopedSessionParams) (*store.Session, error)
 	GetSession(ctx context.Context, id string) (*store.Session, error)
+	ClassifyInvalidAgentToken(ctx context.Context, rawToken string) (*store.AgentTokenUse, error)
 	DeleteSession(ctx context.Context, id string) error
 	DeleteUserSessions(ctx context.Context, userID string) error
 	TouchSession(ctx context.Context, rawToken, ip, userAgent string) error
@@ -391,7 +392,9 @@ type Store interface {
 	CountAgentTokens(ctx context.Context, agentID string) (int, error)
 	GetLatestAgentTokenExpiry(ctx context.Context, agentID string) (*time.Time, error)
 	DeleteAgentTokens(ctx context.Context, agentID string) error
+	DeleteRetiredAgentTokens(ctx context.Context, before time.Time) (int64, error)
 	RotateAgentToken(ctx context.Context, agentID string, tokenExpiresAt *time.Time) (*store.Session, error)
+	RenewAgentToken(ctx context.Context, rawToken string, now time.Time) (*store.Session, error)
 	CreateAgentToken(ctx context.Context, agentID string, expiresAt *time.Time) (*store.Session, error)
 	CountAllOwners(ctx context.Context) (int, error)
 
@@ -844,6 +847,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 
 	// Agent management (instance-level)
 	mux.HandleFunc("POST /v1/agents", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleAgentCreate)))))
+	mux.HandleFunc("POST /v1/agents/self/token/renew", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleAgentTokenRenew)))))
 	mux.HandleFunc("GET /v1/agents", s.requireInitialized(s.requireAuth(actorAuthed(s.handleAgentList))))
 	mux.HandleFunc("GET /v1/agents/{name}", s.requireInitialized(s.requireAuth(actorAuthed(s.handleAgentGet))))
 	mux.HandleFunc("DELETE /v1/agents/{name}", s.requireInitialized(s.requireAuth(actorAuthed(s.handleAgentRevoke))))
@@ -1247,6 +1251,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		sess, err := s.store.GetSession(r.Context(), token)
 		if err != nil || sess == nil {
+			s.captureInvalidAgentTokenUse(r, token)
 			jsonError(w, http.StatusUnauthorized, "Invalid or expired session")
 			return
 		}
@@ -1260,6 +1265,22 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), sessionContextKey, sess)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+func (s *Server) captureInvalidAgentTokenUse(r *http.Request, token string) {
+	use, err := s.store.ClassifyInvalidAgentToken(r.Context(), token)
+	if err != nil || use == nil {
+		return
+	}
+	agent, err := s.store.GetAgentByID(r.Context(), use.AgentID)
+	if err != nil {
+		return
+	}
+	event := "av.agent-token-stale"
+	if use.Reason == "revoked" {
+		event = "av.revoked-agent-token-use"
+	}
+	s.captureEvent(r, event, &Actor{ID: agent.ID, Type: "agent", Role: agent.Role, Agent: agent}, nil)
 }
 
 // maybeTouchSession bumps last_used_at on user sessions and refreshes

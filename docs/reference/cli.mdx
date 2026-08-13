@@ -925,6 +925,16 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `--token-only` | `false` | Output only the raw agent token (for programmatic use) |
   </Accordion>
 
+  <Accordion title="agent-vault agent token renew">
+    ```bash
+    agent-vault agent token renew [--token-file path]
+    ```
+
+    Uses `AGENT_VAULT_ADDR` and the current `AGENT_VAULT_TOKEN` to replace the token for the same agent identity. With no flag, stdout contains only the replacement token. `--token-file` reads the current token from the file and atomically replaces it with a mode-`0600` replacement token.
+
+    The command is for agent runtimes. Use `agent-vault agent rotate <name>` with a management session if renewal loses its response or another process has already renewed the token.
+  </Accordion>
+
   <Accordion title="agent-vault agent rename">
     ```bash
     agent-vault agent rename <name> <new-name>

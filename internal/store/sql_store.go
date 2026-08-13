@@ -20,6 +20,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+var (
+	ErrAgentTokenNotRenewable = errors.New("agent token is not renewable")
+	ErrAgentTokenRequired     = errors.New("agent token required")
+	ErrRenewalConflict        = errors.New("agent token renewal conflict")
+)
+
 // hashSessionToken computes SHA-256 of a raw session token for storage.
 // Session tokens are 256-bit random, so a fast hash is sufficient (no KDF needed).
 func hashSessionToken(rawToken string) string {
@@ -42,8 +48,6 @@ func utcTimePtr(t *time.Time) *time.Time {
 	u := t.UTC()
 	return &u
 }
-
-
 
 // nullableString returns nil for empty strings, enabling SQL NULL inserts.
 func nullableString(s string) interface{} {
@@ -1543,10 +1547,13 @@ func (s *SQLStore) RevokeScopedSession(ctx context.Context, vaultID, publicID st
 func (s *SQLStore) GetSession(ctx context.Context, rawToken string) (*Session, error) {
 	tokenHash := hashSessionToken(rawToken)
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind(`SELECT id, user_id, vault_id, agent_id, vault_role, expires_at, created_at,
+		s.dialect.Rebind(`SELECT s.id, s.user_id, s.vault_id, s.agent_id, s.vault_role, s.expires_at, s.created_at,
 		        last_used_at, idle_ttl_seconds, device_label, last_ip, last_user_agent, public_id,
 		        label, created_by_actor_id, created_by_actor_type
-		 FROM sessions WHERE id = ?`), tokenHash,
+		 FROM sessions s
+		 LEFT JOIN agents a ON a.id = s.agent_id
+		 WHERE s.id = ?
+		   AND (s.agent_id IS NULL OR (a.status = 'active' AND (a.current_token_hash IS NULL OR a.current_token_hash = s.id)))`), tokenHash,
 	)
 
 	var sess Session
@@ -1582,6 +1589,26 @@ func (s *SQLStore) GetSession(ctx context.Context, rawToken string) (*Session, e
 	sess.CreatedByActorID = createdByActorID.String
 	sess.CreatedByActorType = createdByActorType.String
 	return &sess, nil
+}
+
+func (s *SQLStore) ClassifyInvalidAgentToken(ctx context.Context, rawToken string) (*AgentTokenUse, error) {
+	tokenHash := hashSessionToken(rawToken)
+	var agentID string
+	var status string
+	var currentTokenHash sql.NullString
+	err := s.db.QueryRowContext(ctx, s.dialect.Rebind(`SELECT s.agent_id, a.status, a.current_token_hash
+		FROM sessions s JOIN agents a ON a.id = s.agent_id WHERE s.id = ?`), tokenHash,
+	).Scan(&agentID, &status, &currentTokenHash)
+	if err != nil {
+		return nil, err
+	}
+	if status == "revoked" {
+		return &AgentTokenUse{AgentID: agentID, Reason: "revoked"}, nil
+	}
+	if currentTokenHash.Valid && currentTokenHash.String != tokenHash {
+		return &AgentTokenUse{AgentID: agentID, Reason: "stale"}, nil
+	}
+	return nil, nil
 }
 
 // TouchInterval is the minimum gap between last_used_at writes for a
@@ -2714,10 +2741,12 @@ func (s *SQLStore) CreateAgentWithGrantsAndToken(ctx context.Context, name, crea
 	now := time.Now().UTC()
 	nowStr := s.dialect.FormatTime(now)
 
+	rawToken := newAgentToken()
+	tokenHash := hashSessionToken(rawToken)
 	_, err = tx.ExecContext(ctx,
-		s.dialect.Rebind(`INSERT INTO agents (id, name, role, status, created_by, created_at, updated_at)
-		 VALUES (?, ?, ?, 'active', ?, ?, ?)`),
-		agentID, name, role, createdBy, nowStr, nowStr,
+		s.dialect.Rebind(`INSERT INTO agents (id, name, role, status, created_by, created_at, updated_at, current_token_hash)
+		 VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`),
+		agentID, name, role, createdBy, nowStr, nowStr, tokenHash,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating agent: %w", err)
@@ -2734,9 +2763,6 @@ func (s *SQLStore) CreateAgentWithGrantsAndToken(ctx context.Context, name, crea
 			return nil, nil, fmt.Errorf("granting vault role: %w", err)
 		}
 	}
-
-	rawToken := newAgentToken()
-	tokenHash := hashSessionToken(rawToken)
 	expiresAtVal := s.dialect.FormatNullableTime(utcTimePtr(expiresAt))
 	_, err = tx.ExecContext(ctx,
 		s.dialect.Rebind("INSERT INTO sessions (id, agent_id, expires_at, created_at) VALUES (?, ?, ?, ?)"),
@@ -2751,13 +2777,14 @@ func (s *SQLStore) CreateAgentWithGrantsAndToken(ctx context.Context, name, crea
 	}
 
 	ag := &Agent{
-		ID:        agentID,
-		Name:      name,
-		Role:      role,
-		Status:    "active",
-		CreatedBy: createdBy,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:               agentID,
+		Name:             name,
+		CurrentTokenHash: &tokenHash,
+		Role:             role,
+		Status:           "active",
+		CreatedBy:        createdBy,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	sess := &Session{ID: rawToken, AgentID: agentID, ExpiresAt: utcTimePtr(expiresAt), CreatedAt: now}
 	return ag, sess, nil
@@ -2765,7 +2792,7 @@ func (s *SQLStore) CreateAgentWithGrantsAndToken(ctx context.Context, name, crea
 
 func (s *SQLStore) GetAgentByID(ctx context.Context, id string) (*Agent, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind(`SELECT id, name, role, status, created_by, created_at, updated_at, revoked_at
+		s.dialect.Rebind(`SELECT id, name, role, status, created_by, created_at, updated_at, revoked_at, current_token_hash
 		 FROM agents WHERE id = ?`), id,
 	)
 	ag, err := s.scanAgent(row)
@@ -2792,7 +2819,7 @@ func (s *SQLStore) GetAgentNameByID(ctx context.Context, id string) (string, err
 
 func (s *SQLStore) GetAgentByName(ctx context.Context, name string) (*Agent, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind(`SELECT id, name, role, status, created_by, created_at, updated_at, revoked_at
+		s.dialect.Rebind(`SELECT id, name, role, status, created_by, created_at, updated_at, revoked_at, current_token_hash
 		 FROM agents WHERE name = ?`), name,
 	)
 	ag, err := s.scanAgent(row)
@@ -2812,7 +2839,7 @@ func (s *SQLStore) ListAgents(ctx context.Context, vaultID string) ([]Agent, err
 		return nil, fmt.Errorf("vaultID is required; use ListAllAgents for cross-vault listing")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		s.dialect.Rebind(`SELECT a.id, a.name, a.role, a.status, a.created_by, a.created_at, a.updated_at, a.revoked_at
+		s.dialect.Rebind(`SELECT a.id, a.name, a.role, a.status, a.created_by, a.created_at, a.updated_at, a.revoked_at, a.current_token_hash
 		 FROM agents a
 		 JOIN vault_grants vg ON vg.actor_id = a.id AND vg.actor_type = 'agent'
 		 WHERE vg.vault_id = ? ORDER BY a.name`), vaultID,
@@ -2845,7 +2872,7 @@ func (s *SQLStore) ListAgents(ctx context.Context, vaultID string) ([]Agent, err
 // ListAllAgents returns all agents with their vault grants.
 func (s *SQLStore) ListAllAgents(ctx context.Context) ([]Agent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		s.dialect.Rebind(`SELECT id, name, role, status, created_by, created_at, updated_at, revoked_at
+		s.dialect.Rebind(`SELECT id, name, role, status, created_by, created_at, updated_at, revoked_at, current_token_hash
 		 FROM agents ORDER BY name`),
 	)
 	if err != nil {
@@ -2895,15 +2922,12 @@ func (s *SQLStore) RevokeAgent(ctx context.Context, id string) error {
 		return sql.ErrNoRows
 	}
 
-	// Cascade: delete tokens authenticating AS this agent and scoped
-	// tokens this agent minted on behalf of others. Without the second
-	// branch, a revoked agent's orphan token keeps proxying upstream APIs
-	// until its TTL expires (up to scopedSessionMaxTTL).
+	// Scoped tokens minted by a revoked agent retain their existing
+	// revocation behavior. Agent-token history remains for audit attribution.
 	_, err = tx.ExecContext(ctx,
 		s.dialect.Rebind(`DELETE FROM sessions
-		 WHERE agent_id = ?
-		    OR (created_by_actor_id = ? AND created_by_actor_type = 'agent')`),
-		id, id,
+		 WHERE created_by_actor_id = ? AND created_by_actor_type = 'agent'`),
+		id,
 	)
 	if err != nil {
 		return fmt.Errorf("deleting agent tokens: %w", err)
@@ -2965,7 +2989,11 @@ func (s *SQLStore) CountAgentTokens(ctx context.Context, agentID string) (int, e
 	var count int
 	nowStr := s.now()
 	err := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT COUNT(*) FROM sessions WHERE agent_id = ? AND (expires_at IS NULL OR expires_at > ?)"),
+		s.dialect.Rebind(`SELECT COUNT(*) FROM sessions s
+		 JOIN agents a ON a.id = s.agent_id
+		 WHERE s.agent_id = ?
+		   AND (s.expires_at IS NULL OR s.expires_at > ?)
+		   AND (a.current_token_hash IS NULL OR a.current_token_hash = s.id)`),
 		agentID, nowStr,
 	).Scan(&count)
 	return count, err
@@ -2975,7 +3003,10 @@ func (s *SQLStore) GetLatestAgentTokenExpiry(ctx context.Context, agentID string
 	// Check for non-expiring tokens first — they represent "never expires".
 	var hasNonExpiring int
 	if err := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT COUNT(*) FROM sessions WHERE agent_id = ? AND expires_at IS NULL"),
+		s.dialect.Rebind(`SELECT COUNT(*) FROM sessions s
+		 JOIN agents a ON a.id = s.agent_id
+		 WHERE s.agent_id = ? AND s.expires_at IS NULL
+		   AND (a.current_token_hash IS NULL OR a.current_token_hash = s.id)`),
 		agentID,
 	).Scan(&hasNonExpiring); err != nil {
 		return nil, err
@@ -2986,7 +3017,10 @@ func (s *SQLStore) GetLatestAgentTokenExpiry(ctx context.Context, agentID string
 
 	var expiresAtVal interface{}
 	err := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT MAX(expires_at) FROM sessions WHERE agent_id = ? AND expires_at > ?"),
+		s.dialect.Rebind(`SELECT MAX(s.expires_at) FROM sessions s
+		 JOIN agents a ON a.id = s.agent_id
+		 WHERE s.agent_id = ? AND s.expires_at > ?
+		   AND (a.current_token_hash IS NULL OR a.current_token_hash = s.id)`),
 		agentID, s.now(),
 	).Scan(&expiresAtVal)
 	if err != nil {
@@ -3008,43 +3042,127 @@ func (s *SQLStore) DeleteAgentTokens(ctx context.Context, agentID string) error 
 	return nil
 }
 
-func (s *SQLStore) RotateAgentToken(ctx context.Context, agentID string, expiresAt *time.Time) (*Session, error) {
+func (s *SQLStore) DeleteRetiredAgentTokens(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, s.dialect.Rebind(`DELETE FROM sessions
+		WHERE agent_id IS NOT NULL
+		  AND created_at < ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM agents WHERE agents.current_token_hash = sessions.id
+		  )`), s.dialect.FormatTime(before.UTC()))
+	if err != nil {
+		return 0, fmt.Errorf("deleting retired agent tokens: %w", err)
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+func (s *SQLStore) RenewAgentToken(ctx context.Context, rawToken string, now time.Time) (*Session, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, s.dialect.Rebind("DELETE FROM sessions WHERE agent_id = ?"), agentID); err != nil {
-		return nil, fmt.Errorf("deleting agent tokens: %w", err)
+	oldHash := hashSessionToken(rawToken)
+	var agentID sql.NullString
+	var expiresAtValue interface{}
+	var currentHash sql.NullString
+	var status string
+	err = tx.QueryRowContext(ctx, s.dialect.Rebind(`SELECT s.agent_id, s.expires_at, a.current_token_hash, a.status
+		FROM sessions s JOIN agents a ON a.id = s.agent_id WHERE s.id = ?`), oldHash,
+	).Scan(&agentID, &expiresAtValue, &currentHash, &status)
+	if err != nil {
+		return nil, err
+	}
+	if !agentID.Valid {
+		return nil, ErrAgentTokenRequired
+	}
+	if !currentHash.Valid {
+		return nil, ErrAgentTokenNotRenewable
+	}
+	if status != "active" {
+		return nil, sql.ErrNoRows
+	}
+	if currentHash.String != oldHash {
+		return nil, ErrRenewalConflict
+	}
+	expiresAt, err := s.dialect.ScanNullableTime(expiresAtValue)
+	if err != nil {
+		return nil, fmt.Errorf("scanning agent token expiry: %w", err)
+	}
+	now = now.UTC()
+	if expiresAt != nil && !now.Before(*expiresAt) {
+		return nil, sql.ErrNoRows
 	}
 
-	nowStr := s.now()
-	if _, err := tx.ExecContext(ctx,
-		s.dialect.Rebind(`UPDATE agents SET status = 'active', revoked_at = NULL, updated_at = ? WHERE id = ?`),
-		nowStr, agentID,
-	); err != nil {
-		return nil, fmt.Errorf("reactivating agent: %w", err)
-	}
-
-	rawToken := newAgentToken()
-	tokenHash := hashSessionToken(rawToken)
-	now := time.Now().UTC()
-
-	expiresAtVal := s.dialect.FormatNullableTime(utcTimePtr(expiresAt))
-
+	rawReplacement := newAgentToken()
+	newHash := hashSessionToken(rawReplacement)
 	if _, err := tx.ExecContext(ctx,
 		s.dialect.Rebind("INSERT INTO sessions (id, agent_id, expires_at, created_at) VALUES (?, ?, ?, ?)"),
-		tokenHash, agentID, expiresAtVal, s.dialect.FormatTime(now),
+		newHash, agentID.String, s.dialect.FormatNullableTime(expiresAt), s.dialect.FormatTime(now),
 	); err != nil {
-		return nil, fmt.Errorf("creating agent token: %w", err)
+		return nil, fmt.Errorf("creating replacement agent token: %w", err)
 	}
-
+	res, err := tx.ExecContext(ctx,
+		s.dialect.Rebind(`UPDATE agents SET current_token_hash = ?, updated_at = ?
+		 WHERE id = ? AND status = 'active' AND current_token_hash = ?`),
+		newHash, s.dialect.FormatTime(now), agentID.String, oldHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("replacing agent token: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected != 1 {
+		return nil, ErrRenewalConflict
+	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("committing transaction: %w", err)
+		return nil, fmt.Errorf("committing renewal: %w", err)
 	}
+	return &Session{ID: rawReplacement, AgentID: agentID.String, ExpiresAt: expiresAt, CreatedAt: now}, nil
+}
 
-	return &Session{ID: rawToken, AgentID: agentID, ExpiresAt: utcTimePtr(expiresAt), CreatedAt: now}, nil
+func (s *SQLStore) RotateAgentToken(ctx context.Context, agentID string, expiresAt *time.Time) (*Session, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("beginning transaction: %w", err)
+		}
+
+		var previousHash sql.NullString
+		if err := tx.QueryRowContext(ctx, s.dialect.Rebind("SELECT current_token_hash FROM agents WHERE id = ?"), agentID).Scan(&previousHash); err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		now := time.Now().UTC()
+		rawToken := newAgentToken()
+		tokenHash := hashSessionToken(rawToken)
+		if _, err := tx.ExecContext(ctx,
+			s.dialect.Rebind("INSERT INTO sessions (id, agent_id, expires_at, created_at) VALUES (?, ?, ?, ?)"),
+			tokenHash, agentID, s.dialect.FormatNullableTime(utcTimePtr(expiresAt)), s.dialect.FormatTime(now),
+		); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("creating agent token: %w", err)
+		}
+		query := `UPDATE agents SET status = 'active', revoked_at = NULL, current_token_hash = ?, updated_at = ? WHERE id = ? AND current_token_hash = ?`
+		args := []interface{}{tokenHash, s.dialect.FormatTime(now), agentID, previousHash.String}
+		if !previousHash.Valid {
+			query = `UPDATE agents SET status = 'active', revoked_at = NULL, current_token_hash = ?, updated_at = ? WHERE id = ? AND current_token_hash IS NULL`
+			args = args[:3]
+		}
+		res, err := tx.ExecContext(ctx, s.dialect.Rebind(query), args...)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("replacing agent token: %w", err)
+		}
+		if affected, _ := res.RowsAffected(); affected != 1 {
+			_ = tx.Rollback()
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("committing token rotation: %w", err)
+		}
+		return &Session{ID: rawToken, AgentID: agentID, ExpiresAt: utcTimePtr(expiresAt), CreatedAt: now}, nil
+	}
+	return nil, ErrRenewalConflict
 }
 
 func (s *SQLStore) CreateAgentToken(ctx context.Context, agentID string, expiresAt *time.Time) (*Session, error) {
@@ -3065,21 +3183,24 @@ func (s *SQLStore) CreateAgentToken(ctx context.Context, agentID string, expires
 	return &Session{ID: rawToken, AgentID: agentID, ExpiresAt: utcTimePtr(expiresAt), CreatedAt: now}, nil
 }
 
-// scanAgent scans a single agent row from a *sql.Row.
-// Expected column order: id, name, status, created_by, created_at, updated_at, revoked_at
+// scanAgent scans the standard agent projection used by the agent lookup queries.
 func (s *SQLStore) scanAgent(row *sql.Row) (*Agent, error) {
 	var ag Agent
 	var createdAt, updatedAt interface{}
 	var revokedAt interface{}
+	var currentTokenHash sql.NullString
 
 	if err := row.Scan(&ag.ID, &ag.Name, &ag.Role,
-		&ag.Status, &ag.CreatedBy, &createdAt, &updatedAt, &revokedAt); err != nil {
+		&ag.Status, &ag.CreatedBy, &createdAt, &updatedAt, &revokedAt, &currentTokenHash); err != nil {
 		return nil, err
 	}
 
 	ag.CreatedAt, _ = s.dialect.ScanTime(createdAt)
 	ag.UpdatedAt, _ = s.dialect.ScanTime(updatedAt)
 	ag.RevokedAt, _ = s.dialect.ScanNullableTime(revokedAt)
+	if currentTokenHash.Valid {
+		ag.CurrentTokenHash = &currentTokenHash.String
+	}
 	return &ag, nil
 }
 
@@ -3087,15 +3208,19 @@ func (s *SQLStore) scanAgentRow(rows *sql.Rows) (*Agent, error) {
 	var ag Agent
 	var createdAt, updatedAt interface{}
 	var revokedAt interface{}
+	var currentTokenHash sql.NullString
 
 	if err := rows.Scan(&ag.ID, &ag.Name, &ag.Role,
-		&ag.Status, &ag.CreatedBy, &createdAt, &updatedAt, &revokedAt); err != nil {
+		&ag.Status, &ag.CreatedBy, &createdAt, &updatedAt, &revokedAt, &currentTokenHash); err != nil {
 		return nil, err
 	}
 
 	ag.CreatedAt, _ = s.dialect.ScanTime(createdAt)
 	ag.UpdatedAt, _ = s.dialect.ScanTime(updatedAt)
 	ag.RevokedAt, _ = s.dialect.ScanNullableTime(revokedAt)
+	if currentTokenHash.Valid {
+		ag.CurrentTokenHash = &currentTokenHash.String
+	}
 	return &ag, nil
 }
 

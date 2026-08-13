@@ -353,21 +353,29 @@ type UnmatchedHost struct {
 // Agent represents a named, instance-level agent entity.
 // Agents have multi-vault access via VaultGrant records and an instance-level role.
 type Agent struct {
-	ID        string
-	Name      string
-	Role      string // "owner", "member", or "no-access" (instance-level role, like users)
-	Status    string // "active" or "revoked"
-	CreatedBy string // user ID of the creator
-	Vaults    []VaultGrant
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	RevokedAt *time.Time
+	ID               string
+	Name             string
+	CurrentTokenHash *string
+	Role             string // "owner", "member", or "no-access" (instance-level role, like users)
+	Status           string // "active" or "revoked"
+	CreatedBy        string // user ID of the creator
+	Vaults           []VaultGrant
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	RevokedAt        *time.Time
 }
 
 // AgentVaultGrantSpec is a vault ID + vault role pair used when creating an agent.
 type AgentVaultGrantSpec struct {
 	VaultID string
 	Role    string
+}
+
+// AgentTokenUse identifies an invalid agent token whose hash is still retained.
+// It is only for internal audit classification and never crosses the HTTP API.
+type AgentTokenUse struct {
+	AgentID string
+	Reason  string // "stale" or "revoked"
 }
 
 // UserInvite represents an instance-level invitation for a new user.
@@ -484,6 +492,7 @@ type Store interface {
 	CreateUserSession(ctx context.Context, p CreateUserSessionParams) (*Session, error)
 	CreateScopedSession(ctx context.Context, p CreateScopedSessionParams) (*Session, error)
 	GetSession(ctx context.Context, id string) (*Session, error)
+	ClassifyInvalidAgentToken(ctx context.Context, rawToken string) (*AgentTokenUse, error)
 	DeleteSession(ctx context.Context, id string) error
 	// ListScopedSessionsByVault returns active vault-scoped tokens for the
 	// vault, most recent first. Used by the Tokens tab.
@@ -566,8 +575,9 @@ type Store interface {
 	CountAgentTokens(ctx context.Context, agentID string) (int, error)
 	GetLatestAgentTokenExpiry(ctx context.Context, agentID string) (*time.Time, error)
 	DeleteAgentTokens(ctx context.Context, agentID string) error
-	// RotateAgentToken deletes the agent's existing tokens and mints a new one
-	// in a single transaction so the agent is never stranded without a token.
+	DeleteRetiredAgentTokens(ctx context.Context, before time.Time) (int64, error)
+	RenewAgentToken(ctx context.Context, rawToken string, now time.Time) (*Session, error)
+	// RotateAgentToken atomically replaces the current agent token.
 	RotateAgentToken(ctx context.Context, agentID string, tokenExpiresAt *time.Time) (*Session, error)
 	CreateAgentToken(ctx context.Context, agentID string, expiresAt *time.Time) (*Session, error)
 	CountAllOwners(ctx context.Context) (int, error)

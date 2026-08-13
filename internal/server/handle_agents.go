@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,36 @@ import (
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/store"
 )
+
+func (s *Server) handleAgentTokenRenew(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil || sess.AgentID == "" {
+		jsonError(w, http.StatusForbidden, "agent_token_required")
+		return
+	}
+
+	replacement, err := s.store.RenewAgentToken(r.Context(), sess.ID, time.Now().UTC())
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrAgentTokenNotRenewable):
+			jsonError(w, http.StatusBadRequest, "agent_token_not_renewable")
+		case errors.Is(err, store.ErrRenewalConflict):
+			jsonError(w, http.StatusConflict, "renewal_conflict")
+		default:
+			jsonError(w, http.StatusUnauthorized, "invalid_session")
+		}
+		return
+	}
+
+	agent, err := s.store.GetAgentByID(r.Context(), sess.AgentID)
+	if err == nil {
+		s.captureEvent(r, "av.agent-token-renew", &Actor{ID: agent.ID, Type: "agent", Role: agent.Role, Agent: agent}, nil)
+	}
+	jsonOK(w, map[string]string{
+		"av_agent_token": replacement.ID,
+		"renewed_at":     replacement.CreatedAt.UTC().Format(time.RFC3339),
+	})
+}
 
 // reservedVaultNames are names that conflict with /vaults/* frontend routes.
 // Keep in sync with vaultsLayoutRoute children in web/src/router.tsx.

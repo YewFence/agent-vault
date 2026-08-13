@@ -40,6 +40,32 @@ func TestCommandsRegistered(t *testing.T) {
 	}
 }
 
+func TestReplaceTokenFile_ReplacesContentsWithOwnerOnlyPermissions(t *testing.T) {
+	oldToken := "av_agt_old"
+	newToken := "av_agt_new"
+	tokenFile := filepath.Join(t.TempDir(), "agent.token")
+	if err := os.WriteFile(tokenFile, []byte(oldToken+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceTokenFile(tokenFile, newToken); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != newToken {
+		t.Fatalf("token file = %q, want %q", contents, newToken)
+	}
+	info, err := os.Stat(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("token file permissions = %o, want 0600", info.Mode().Perm())
+	}
+}
+
 func TestCASubcommandsRegistered(t *testing.T) {
 	caCmd := findSubcommand(rootCmd, "ca")
 	if caCmd == nil {

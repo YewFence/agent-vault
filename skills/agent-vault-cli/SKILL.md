@@ -36,6 +36,12 @@ extract, or expose credential values or placeholders. Never use
 `AGENT_VAULT_TOKEN` as an upstream credential; it authenticates only with Agent
 Vault.
 
+## Agent token renewal
+
+When a long-lived `av_agt_` token needs regular replacement, run `agent-vault agent token renew`. It reads `AGENT_VAULT_ADDR` and `AGENT_VAULT_TOKEN` from the runtime environment and prints only the replacement token. For a persistent runtime token file, run `agent-vault agent token renew --token-file <path>`; it replaces the file atomically.
+
+Do not renew the same token from more than one process. If the renewal response is lost or renewal reports that the token is no longer current, the runtime cannot retrieve the replacement. Ask an authorized operator to run `agent-vault agent rotate <name>`.
+
 ## Diagnose failures
 
 Inspect the HTTP status and structured response before changing the request.

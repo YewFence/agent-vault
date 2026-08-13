@@ -24,8 +24,8 @@ const (
 	// SettingKey is the instance_settings key holding the JSON payload.
 	SettingKey = "logs_retention"
 
-	envMaxAgeHours  = "AGENT_VAULT_LOGS_MAX_AGE_HOURS"
-	envMaxRows      = "AGENT_VAULT_LOGS_MAX_ROWS_PER_VAULT"
+	envMaxAgeHours   = "AGENT_VAULT_LOGS_MAX_AGE_HOURS"
+	envMaxRows       = "AGENT_VAULT_LOGS_MAX_ROWS_PER_VAULT"
 	envRetentionLock = "AGENT_VAULT_LOGS_RETENTION_LOCK"
 )
 
@@ -48,6 +48,7 @@ type retentionSettingPayload struct {
 type retentionStore interface {
 	GetSetting(ctx context.Context, key string) (string, error)
 	DeleteOldRequestLogs(ctx context.Context, before time.Time) (int64, error)
+	DeleteRetiredAgentTokens(ctx context.Context, before time.Time) (int64, error)
 	TrimRequestLogsToCap(ctx context.Context, vaultID string, cap int64) (int64, error)
 	VaultIDsWithLogs(ctx context.Context) ([]string, error)
 }
@@ -165,6 +166,13 @@ func trimOnce(ctx context.Context, s store.Store, logger *slog.Logger, cfg Reten
 			}
 		} else if n > 0 && logger != nil {
 			logger.Debug("request_logs ttl trimmed", "rows", n, "before", before)
+		}
+		if n, err := s.DeleteRetiredAgentTokens(ctx, before); err != nil {
+			if logger != nil {
+				logger.Warn("retired agent token ttl trim failed", "err", err.Error())
+			}
+		} else if n > 0 && logger != nil {
+			logger.Debug("retired agent tokens ttl trimmed", "rows", n, "before", before)
 		}
 	}
 

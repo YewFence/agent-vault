@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
@@ -79,15 +81,15 @@ var agentInfoCmd = &cobra.Command{
 		}
 
 		var info struct {
-			Name           string `json:"name"`
-			Role           string `json:"role"`
-			Status         string `json:"status"`
-			CreatedBy      string `json:"created_by"`
-			CreatedAt      string `json:"created_at"`
-			UpdatedAt      string `json:"updated_at"`
-			RevokedAt      *string `json:"revoked_at,omitempty"`
+			Name         string  `json:"name"`
+			Role         string  `json:"role"`
+			Status       string  `json:"status"`
+			CreatedBy    string  `json:"created_by"`
+			CreatedAt    string  `json:"created_at"`
+			UpdatedAt    string  `json:"updated_at"`
+			RevokedAt    *string `json:"revoked_at,omitempty"`
 			ActiveTokens int     `json:"active_tokens"`
-			Vaults         []struct {
+			Vaults       []struct {
 				VaultName string `json:"vault_name"`
 				VaultRole string `json:"vault_role"`
 			} `json:"vaults"`
@@ -201,6 +203,83 @@ var agentRotateCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+var agentTokenCmd = &cobra.Command{
+	Use:   "token",
+	Short: "Manage the current agent token",
+}
+
+var agentTokenRenewCmd = &cobra.Command{
+	Use:   "renew",
+	Short: "Renew the current agent token",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		tokenFile, _ := cmd.Flags().GetString("token-file")
+		token := os.Getenv(envVarToken)
+		if tokenFile != "" {
+			contents, err := os.ReadFile(tokenFile)
+			if err != nil {
+				return fmt.Errorf("reading token file: %w", err)
+			}
+			token = strings.TrimSpace(string(contents))
+		}
+		if token == "" {
+			return fmt.Errorf("%s is required", envVarToken)
+		}
+		address := strings.TrimRight(os.Getenv("AGENT_VAULT_ADDR"), "/")
+		if address == "" {
+			return fmt.Errorf("AGENT_VAULT_ADDR is required")
+		}
+
+		body, err := doAdminRequestWithBody("POST", address+"/v1/agents/self/token/renew", token, nil)
+		if err != nil {
+			return fmt.Errorf("renewing agent token: %w; use agent-vault agent rotate <name> with a management session to recover", err)
+		}
+		var response struct {
+			Token string `json:"av_agent_token"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return fmt.Errorf("parsing response: %w", err)
+		}
+		if response.Token == "" {
+			return fmt.Errorf("server returned an empty agent token")
+		}
+		if tokenFile == "" {
+			_, err = fmt.Fprint(cmd.OutOrStdout(), response.Token)
+			return err
+		}
+		return replaceTokenFile(tokenFile, response.Token)
+	},
+}
+
+func replaceTokenFile(path, token string) error {
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".agent-vault-token-*")
+	if err != nil {
+		return fmt.Errorf("creating temporary token file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := temporary.Chmod(0600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("setting temporary token file permissions: %w", err)
+	}
+	if _, err := temporary.WriteString(token); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("writing replacement token: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("syncing replacement token: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("closing replacement token: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replacing token file: %w", err)
+	}
+	return nil
 }
 
 var agentRenameCmd = &cobra.Command{
@@ -406,6 +485,7 @@ func init() {
 
 	agentSetRoleCmd.Flags().String("role", "", "instance-level role (owner, member, or no-access)")
 	agentRotateCmd.Flags().Bool("token-only", false, "output only the raw agent token (for programmatic use)")
+	agentTokenRenewCmd.Flags().String("token-file", "", "replace this token file atomically instead of writing the token to stdout")
 
 	// Instance-level agent commands: agent-vault agent [list|info|revoke|delete|rotate|rename|set-role]
 	topAgentCmd.AddCommand(agentListCmd)
@@ -413,6 +493,8 @@ func init() {
 	topAgentCmd.AddCommand(agentRevokeCmd)
 	topAgentCmd.AddCommand(agentDeleteCmd)
 	topAgentCmd.AddCommand(agentRotateCmd)
+	agentTokenCmd.AddCommand(agentTokenRenewCmd)
+	topAgentCmd.AddCommand(agentTokenCmd)
 	topAgentCmd.AddCommand(agentRenameCmd)
 	topAgentCmd.AddCommand(agentSetRoleCmd)
 	rootCmd.AddCommand(topAgentCmd)

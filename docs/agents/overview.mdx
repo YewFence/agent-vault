@@ -112,13 +112,27 @@ agent-vault vault agent set-role my-agent --role member
 agent-vault vault agent remove my-agent
 ```
 
-### Rotating an agent token
+### Renewing and rotating an agent token
+
+An agent runtime can replace its own current token without storing a management session:
+
+```bash
+export AGENT_VAULT_TOKEN="$(agent-vault agent token renew)"
+```
+
+For a persistent runtime, keep the token in a mode-`0600` file. The command writes and syncs a temporary file in the same directory, then atomically replaces the token file:
+
+```bash
+agent-vault agent token renew --token-file ~/.config/agent-vault/my-agent.token
+```
+
+Only one process should own an agent token. If a renewal response is lost or another process renews first, the old token cannot recover the replacement; use an operator rotation instead.
 
 ```bash
 agent-vault agent rotate my-agent
 ```
 
-Invalidates the agent's existing token and prints a new one. Update `AGENT_VAULT_TOKEN` wherever the agent runs — the previous token stops working immediately.
+Operator rotation invalidates the current token and prints a new one. It is the recovery path for a lost renewal response or suspected token compromise.
 
 ## The X-Vault header
 

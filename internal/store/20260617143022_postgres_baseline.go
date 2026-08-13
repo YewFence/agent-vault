@@ -13,6 +13,7 @@ func init() {
 		return db.Exec(postgresBaselineSQL).Error
 	})
 }
+
 // postgresBaselineSQL creates the full Postgres schema equivalent to
 // SQLite migrations 001-050. Embedded as a raw SQL string because
 // defining 20+ GORM model structs just for a one-time baseline is
@@ -59,8 +60,11 @@ CREATE TABLE agents (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     revoked_at TIMESTAMPTZ,
-    role       TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('owner', 'member', 'no-access'))
+    role       TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('owner', 'member', 'no-access')),
+    current_token_hash TEXT
 );
+
+CREATE UNIQUE INDEX idx_agents_current_token_hash ON agents(current_token_hash) WHERE current_token_hash IS NOT NULL;
 
 CREATE TABLE sessions (
     id                    TEXT PRIMARY KEY,

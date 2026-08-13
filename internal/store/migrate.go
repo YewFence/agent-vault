@@ -398,7 +398,7 @@ func copyUsers(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialec
 
 func copyAgents(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialect) (int, error) {
 	rows, err := src.db.QueryContext(ctx,
-		"SELECT id, name, status, created_by, created_at, updated_at, revoked_at, role FROM agents")
+		"SELECT id, name, status, created_by, created_at, updated_at, revoked_at, role, current_token_hash FROM agents")
 	if err != nil {
 		return 0, err
 	}
@@ -407,8 +407,9 @@ func copyAgents(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Diale
 	n := 0
 	for rows.Next() {
 		var id, name, status, createdBy, role string
+		var currentTokenHash sql.NullString
 		var createdAt, updatedAt, revokedAt interface{}
-		if err := rows.Scan(&id, &name, &status, &createdBy, &createdAt, &updatedAt, &revokedAt, &role); err != nil {
+		if err := rows.Scan(&id, &name, &status, &createdBy, &createdAt, &updatedAt, &revokedAt, &role, &currentTokenHash); err != nil {
 			return n, err
 		}
 		ca, err := convertTime(createdAt, src.dialect, dstDialect)
@@ -424,8 +425,8 @@ func copyAgents(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Diale
 			return n, fmt.Errorf("converting revoked_at: %w", err)
 		}
 		_, err = tx.ExecContext(ctx,
-			dstDialect.Rebind("INSERT INTO agents (id, name, status, created_by, created_at, updated_at, revoked_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-			id, name, status, createdBy, ca, ua, ra, role,
+			dstDialect.Rebind("INSERT INTO agents (id, name, status, created_by, created_at, updated_at, revoked_at, role, current_token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+			id, name, status, createdBy, ca, ua, ra, role, nullableString(currentTokenHash.String),
 		)
 		if err != nil {
 			return n, err

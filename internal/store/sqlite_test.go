@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1794,6 +1795,66 @@ func TestCreateAgentWithGrantsAndToken_NoVaults(t *testing.T) {
 	}
 	if n, _ := s.CountAgentTokens(ctx, ag.ID); n != 1 {
 		t.Fatalf("expected 1 token, got %d", n)
+	}
+}
+
+func TestRenewAgentToken_ReplacesCurrentToken(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	agent, original, err := s.CreateAgentWithGrantsAndToken(ctx, "renewbot", "creator-uid", "no-access", nil, nil)
+	if err != nil {
+		t.Fatalf("CreateAgentWithGrantsAndToken: %v", err)
+	}
+	if agent.CurrentTokenHash == nil || *agent.CurrentTokenHash != hashSessionToken(original.ID) {
+		t.Fatalf("expected current token hash for initial token, got %+v", agent)
+	}
+
+	replacement, err := s.RenewAgentToken(ctx, original.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("RenewAgentToken: %v", err)
+	}
+	if replacement.ID == original.ID || !strings.HasPrefix(replacement.ID, "av_agt_") {
+		t.Fatalf("expected a fresh agent token, got %q", replacement.ID)
+	}
+	if _, err := s.GetSession(ctx, original.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected original token to be rejected, got %v", err)
+	}
+	if session, err := s.GetSession(ctx, replacement.ID); err != nil || session.AgentID != agent.ID {
+		t.Fatalf("expected replacement token to authenticate as %q, got %+v, %v", agent.ID, session, err)
+	}
+	count, err := s.CountAgentTokens(ctx, agent.ID)
+	if err != nil || count != 1 {
+		t.Fatalf("expected exactly one active token, got %d, %v", count, err)
+	}
+}
+
+func TestDeleteRetiredAgentTokens_PreservesCurrentToken(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	agent, original, err := s.CreateAgentWithGrantsAndToken(ctx, "cleanupbot", "creator-uid", "no-access", nil, nil)
+	if err != nil {
+		t.Fatalf("CreateAgentWithGrantsAndToken: %v", err)
+	}
+	replacement, err := s.RenewAgentToken(ctx, original.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("RenewAgentToken: %v", err)
+	}
+	oldCreatedAt := time.Now().Add(-2 * time.Hour).UTC().Format(time.DateTime)
+	if _, err := s.db.ExecContext(ctx, "UPDATE sessions SET created_at = ? WHERE id = ?", oldCreatedAt, hashSessionToken(original.ID)); err != nil {
+		t.Fatalf("aging retired token: %v", err)
+	}
+	deleted, err := s.DeleteRetiredAgentTokens(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("DeleteRetiredAgentTokens: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted %d retired tokens, want 1", deleted)
+	}
+	if _, err := s.GetSession(ctx, original.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected retired token to be absent, got %v", err)
+	}
+	if session, err := s.GetSession(ctx, replacement.ID); err != nil || session.AgentID != agent.ID {
+		t.Fatalf("expected current token to survive, got %+v, %v", session, err)
 	}
 }
 

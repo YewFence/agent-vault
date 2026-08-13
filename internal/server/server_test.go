@@ -267,6 +267,25 @@ func (m *mockStore) GetSession(_ context.Context, id string) (*store.Session, er
 	return s, nil
 }
 
+func (m *mockStore) ClassifyInvalidAgentToken(_ context.Context, rawToken string) (*store.AgentTokenUse, error) {
+	session, ok := m.sessions[rawToken]
+	if !ok || session.AgentID == "" {
+		return nil, nil
+	}
+	for _, agent := range m.agents {
+		if agent.ID != session.AgentID {
+			continue
+		}
+		if agent.Status == "revoked" {
+			return &store.AgentTokenUse{AgentID: agent.ID, Reason: "revoked"}, nil
+		}
+		if agent.CurrentTokenHash != nil && *agent.CurrentTokenHash != rawToken {
+			return &store.AgentTokenUse{AgentID: agent.ID, Reason: "stale"}, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockStore) GetVault(_ context.Context, name string) (*store.Vault, error) {
 	ns, ok := m.vaults[name]
 	if !ok {
@@ -956,6 +975,7 @@ func (m *mockStore) CreateAgentWithGrantsAndToken(ctx context.Context, name, cre
 	if err != nil {
 		return nil, nil, err
 	}
+	ag.CurrentTokenHash = &sess.ID
 	return ag, sess, nil
 }
 
@@ -1103,10 +1123,11 @@ func (m *mockStore) DeleteAgentTokens(_ context.Context, agentID string) error {
 	return nil
 }
 
+func (m *mockStore) DeleteRetiredAgentTokens(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockStore) RotateAgentToken(ctx context.Context, agentID string, expiresAt *time.Time) (*store.Session, error) {
-	if err := m.DeleteAgentTokens(ctx, agentID); err != nil {
-		return nil, err
-	}
 	for _, ag := range m.agents {
 		if ag.ID == agentID {
 			ag.Status = "active"
@@ -1114,7 +1135,42 @@ func (m *mockStore) RotateAgentToken(ctx context.Context, agentID string, expire
 			break
 		}
 	}
-	return m.CreateAgentToken(ctx, agentID, expiresAt)
+	sess, err := m.CreateAgentToken(ctx, agentID, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	for _, ag := range m.agents {
+		if ag.ID == agentID {
+			ag.CurrentTokenHash = &sess.ID
+		}
+	}
+	return sess, nil
+}
+
+func (m *mockStore) RenewAgentToken(_ context.Context, rawToken string, now time.Time) (*store.Session, error) {
+	sess, ok := m.sessions[rawToken]
+	if !ok || sess.AgentID == "" {
+		return nil, store.ErrAgentTokenRequired
+	}
+	for _, agent := range m.agents {
+		if agent.ID != sess.AgentID {
+			continue
+		}
+		if agent.CurrentTokenHash == nil {
+			return nil, store.ErrAgentTokenNotRenewable
+		}
+		if *agent.CurrentTokenHash != rawToken {
+			return nil, store.ErrRenewalConflict
+		}
+		replacement, err := m.CreateAgentToken(context.Background(), sess.AgentID, sess.ExpiresAt)
+		if err != nil {
+			return nil, err
+		}
+		replacement.CreatedAt = now
+		agent.CurrentTokenHash = &replacement.ID
+		return replacement, nil
+	}
+	return nil, store.ErrAgentTokenRequired
 }
 
 func (m *mockStore) CreateAgentToken(_ context.Context, agentID string, expiresAt *time.Time) (*store.Session, error) {
@@ -4124,8 +4180,38 @@ func TestHandleAgentRotate_InvalidatesOldToken(t *testing.T) {
 	if newToken == "" || newToken == oldToken.ID {
 		t.Fatalf("expected fresh non-empty token, got %q (old was %q)", newToken, oldToken.ID)
 	}
-	if _, ok := ms.sessions[oldToken.ID]; ok {
-		t.Fatalf("expected old session deleted after rotate, still present")
+	if _, ok := ms.sessions[oldToken.ID]; !ok {
+		t.Fatalf("expected old token retained for audit attribution")
+	}
+	if agent := ms.agents["bot"]; agent.CurrentTokenHash == nil || *agent.CurrentTokenHash != newToken {
+		t.Fatalf("expected new token to be current, got %+v", agent)
+	}
+}
+
+func TestHandleAgentTokenRenew_ReplacesCurrentToken(t *testing.T) {
+	srv, ms, _ := setupAgentTest(t)
+	oldToken, _ := ms.CreateAgentToken(context.Background(), "a1", nil)
+	ms.agents["bot"] = &store.Agent{ID: "a1", Name: "bot", Role: "no-access", Status: "active", CurrentTokenHash: &oldToken.ID}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/agents/self/token/renew", nil)
+	req.Header.Set("Authorization", "Bearer "+oldToken.ID)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Token string `json:"av_agent_token"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Token == "" || response.Token == oldToken.ID {
+		t.Fatalf("expected a replacement token, got %q", response.Token)
+	}
+	if current := *ms.agents["bot"].CurrentTokenHash; current != response.Token {
+		t.Fatalf("expected replacement token to be current, got %q", current)
 	}
 }
 

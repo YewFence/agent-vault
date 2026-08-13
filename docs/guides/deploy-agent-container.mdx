@@ -46,9 +46,11 @@ Set these on the container's environment (k8s `env:`, Fly `[env]`, ECS task defi
 - `--ttl` is rejected — the token's lifetime is fixed at mint time, so the flag has no effect.
 - `AGENT_VAULT_VAULT` is required (no project file or interactive picker fallback in agent mode).
 
-## Rotating the token
+## Renewing the token
 
-Run `agent-vault agent rotate <name>` to mint a new token. The old token is invalidated immediately on rotation, so roll the deployment with the new `AGENT_VAULT_TOKEN` promptly to avoid a window where the in-flight container is still using the now-invalid token.
+Run `agent-vault agent token renew` inside a single-owner agent runtime to replace its current token without a management credential. For a mounted token file, use `agent-vault agent token renew --token-file /run/secrets/agent-vault-token`; it atomically replaces the file with owner-only permissions. A replacement takes effect immediately, so coordinate the runtime's reload with the token file update.
+
+Use `agent-vault agent rotate <name>` from an operator session when the runtime lost the renewal response, a competing process won a renewal, or compromise is suspected.
 
 ## Troubleshooting
 
