@@ -1,114 +1,62 @@
-# Agent Vault — Agent Protocol
+# Agent Vault Development Guide
 
-Agent Vault is an HTTP proxy that attaches credentials to your outbound requests. You never see or handle credentials directly — route authenticated requests through Agent Vault and it authenticates on your behalf.
+This file is for contributors and coding agents working in this repository. Agent Vault is a Go credential broker with a React management UI, a transparent HTTP(S) proxy, and SQLite and PostgreSQL storage backends. Product usage belongs in `README.md`, `docs/`, and `skills/agent-vault-cli/`, not in this file.
 
-## When to use
+## Toolchain and commands
 
-1. Check that `AGENT_VAULT_TOKEN` is set — if not, Agent Vault is not available
-2. Call `/discover` to get the list of brokerable services
-3. For requests to hosts listed in the discover response, route through Agent Vault
-4. For all other requests, make them directly
+Tool versions and local development tasks are defined in `mise.toml`.
 
-## Environment variables
+- `mise run web:setup` installs the web development dependencies.
+- `mise run dev` starts the Go API with hot reload and the Vite frontend.
+- `mise run test` runs the Go test suite.
+- `mise run lint` runs Go linting and the web TypeScript check.
+- `mise run build` builds the frontend and the `agent-vault` binary.
+- `mise run sdk:check` installs, typechecks, tests, and builds the TypeScript SDK.
+- `mise run docker:build` builds the Docker image.
 
-| Variable | Description |
-|----------|-------------|
-| `AGENT_VAULT_ADDR` | Base URL of the Agent Vault server (e.g. `http://127.0.0.1:14321`) |
-| `AGENT_VAULT_TOKEN` | Bearer token for authenticating with Agent Vault. Either a vault-scoped session token or a long-lived agent token. |
-| `AGENT_VAULT_VAULT` | Vault the session is scoped to |
+Use focused package tests while iterating, then run the applicable repository-level checks before considering the work complete.
 
-## The X-Vault header
+## Repository map
 
-If your token is an instance-level agent token (created via `agent-vault agent create`), you must include `X-Vault: {vault_name}` on all control-plane requests (`/discover`, `/v1/proposals`). If `AGENT_VAULT_VAULT` is set, use that value. Vault-scoped sessions (from `vault run`) do not need this header. Proxied requests don't use `X-Vault` either — vault for proxy traffic is communicated via the `Proxy-Authorization` userinfo (`token:vault`) baked into `HTTPS_PROXY`/`HTTP_PROXY`, which `vault run` configures for you.
+- `main.go` and `cmd/`: Cobra CLI entrypoint and commands.
+- `internal/server/`: HTTP API, authentication boundaries, and embedded SPA serving.
+- `internal/broker/` and `internal/brokercore/`: service matching, request transformation, and credential injection.
+- `internal/proposal/`: proposal types, validation, and merge behavior.
+- `internal/mitm/` and `internal/ca/`: HTTP(S) proxying, TLS interception, and CA management.
+- `internal/store/`: SQLite and PostgreSQL persistence, dialect handling, and schema migrations.
+- `internal/isolation/`: host and container execution modes for `vault run`.
+- `web/`: React, TypeScript, Vite, and Tailwind management UI.
+- `sdks/sdk-typescript/`: published TypeScript SDK.
+- `skills/agent-vault-cli/`: the agent-facing runtime contract embedded in the binary.
+- `docs/`: Mintlify documentation source.
 
-## Discover available services
+## Development invariants
 
-Always call this first to learn which services have credentials configured:
+- `web/` builds into `internal/server/webdist/`, which is embedded with `go:embed`. Treat `webdist` as generated output: change the source under `web/` and do not edit or commit generated files.
+- Schema migrations are Go files under `internal/store/` registered with `RegisterGORMMigration`. New migrations must work for both SQLite and PostgreSQL and include migration verification coverage.
+- Packages whose tests can inherit `AGENT_VAULT_*` variables from the developer shell should use the existing `internal/testenv` `TestMain` pattern. Tests that exercise an environment variable explicitly should set it with `t.Setenv`.
+- For agent token lifecycle work, use the domain terms defined in `CONTEXT.md`: an agent token renews itself, while an authorized operator rotates it.
 
-```
-GET {AGENT_VAULT_ADDR}/discover
-Authorization: Bearer {AGENT_VAULT_TOKEN}
-X-Vault: {vault_name}
-```
+## Change propagation
 
-Response includes `vault`, `services` (each entry has `name` and `host`, where `host` is the joined inline form — `slack.com/api/*` for path-scoped rules), and `available_credentials` (key names only — values are never exposed). Before creating a proposal, check `available_credentials` to avoid requesting credentials that already exist in the vault. When two services share a bare host (e.g. one service at `slack.com/api/*` and another at `slack.com/api/apps.connections.*`), distinguish them by `name` in subsequent operations.
+- When agent-facing endpoints, request or response fields, authentication behavior, or failure handling change, update `skills/agent-vault-cli/` and any applicable pages under `docs/`.
+- When adding, consuming, or changing the fallback behavior of an environment variable, update `.env.example`, `docs/self-hosting/environment-variables.mdx`, and the environment variable table in `docs/reference/cli.mdx`.
+- When adding or changing a CLI flag, update the affected command in `docs/reference/cli.mdx`.
+- When operator-facing behavior changes, update `README.md` and scan the relevant quickstart, guide, self-hosting, learn, and reference pages under `docs/`.
+- When the TypeScript SDK's public behavior changes, update its tests and `sdks/sdk-typescript/README.md`.
 
-## Route requests through the proxy
+## Verification by scope
 
-For services returned by `/discover`, just call the real upstream URL — `agent-vault vault run` configures `HTTPS_PROXY` and the Agent Vault root CA on the child process so standard HTTP clients transparently route through the broker. Agent Vault strips broker-scoped headers, attaches the real credential, and forwards to the upstream over HTTPS.
+- Go changes: run focused tests while iterating, followed by `mise run test` and `mise run lint`.
+- Web changes: run `mise run lint` and `mise run build`.
+- TypeScript SDK changes: run `mise run sdk:check`.
+- Go dependency changes: run `go mod tidy` and verify that only the intended `go.mod` and `go.sum` changes remain.
+- Container isolation changes: run the Docker integration tests documented in `internal/isolation/integration_test.go` when Docker is available.
 
-```
-GET https://api.stripe.com/v1/charges
-```
+## Sources of truth
 
-## Manage services directly (admin only)
-
-If you have vault admin role, you can add or remove services without proposals:
-
-```
-POST {AGENT_VAULT_ADDR}/v1/vaults/{vault_name}/services    -- upsert services by name (body: {"services": [...]}). Each entry must include `host` (accepts inline path form like `slack.com/api/*`) and `name` (canonical slug) — `name` may be omitted only when `host` uniquely matches an existing service in the vault, in which case the server adopts that entry's name.
-DELETE {AGENT_VAULT_ADDR}/v1/vaults/{vault_name}/services/{name}  -- remove a service. The slot also accepts a host as a back-compat shim, returning 409 with the candidate names when more than one service shares that host.
-```
-
-Use these when you already have credentials stored. Use proposals when the human needs to provide new credentials.
-
-## Request access to new services via proposals
-
-When you get a `403` for a host not in `/discover`, create a proposal to request access. The 403 response includes a `proposal_hint` with the denied host.
-
-**Before proposing a proposal, look up how the target service authenticates API requests** to choose the correct auth type.
-
-```json
-POST {AGENT_VAULT_ADDR}/v1/proposals
-Authorization: Bearer {AGENT_VAULT_TOKEN}
-Content-Type: application/json
-
-{
-  "services": [{
-    "action": "set",
-    "name": "stripe",
-    "host": "api.stripe.com",
-    "auth": {"type": "bearer", "token": "STRIPE_KEY"}
-  }],
-  "credentials": [{
-    "action": "set",
-    "key": "STRIPE_KEY",
-    "description": "Stripe API key",
-    "obtain": "https://dashboard.stripe.com/apikeys",
-    "obtain_instructions": "Developers > API Keys > Reveal test key"
-  }],
-  "message": "Need Stripe API key for billing feature",
-  "user_message": "I need access to your Stripe account to build the checkout page."
-}
-```
-
-### Auth types
-
-| Type | Config | Common services |
-|------|--------|----------------|
-| `bearer` | `{"type": "bearer", "token": "SECRET_KEY"}` | Stripe, GitHub, OpenAI |
-| `basic` | `{"type": "basic", "username": "API_KEY"}` | Ashby, Jira (email + token) |
-| `api-key` | `{"type": "api-key", "key": "SECRET", "header": "x-api-key"}` | Anthropic |
-| `custom` | `{"type": "custom", "headers": {"X-Key": "{{ SECRET }}"}}` | Anything else |
-
-### After creating a proposal
-
-1. Present the `approval_url` to the user conversationally
-2. Poll `GET {AGENT_VAULT_ADDR}/v1/proposals/{id}` every 3 seconds for the first 30 seconds, then every 10 seconds, up to 10 minutes — until status is `applied`
-3. Retry your original request
-
-## Error handling
-
-| Status | Meaning | Action |
-|--------|---------|--------|
-| 401 | Invalid or expired token | Check `AGENT_VAULT_TOKEN` |
-| 403 | Host not allowed | Propose a proposal |
-| 429 | Too many pending proposals | Wait for review |
-| 502 | Missing credential or upstream unreachable | Tell user a credential may need to be added |
-
-## Rules
-
-- **Never** extract, log, or display credential values
-- **Never** hardcode tokens — always read from `AGENT_VAULT_TOKEN`
-- **Only** request services returned by `/discover` — if not listed, propose a proposal
-- Do not modify or forge the `Authorization` header beyond using your token
+- CLI behavior: Cobra commands under `cmd/` and `agent-vault --help`.
+- HTTP API behavior: handlers under `internal/server/`.
+- Environment variables: `.env.example`.
+- User and operator documentation: `README.md` and `docs/`.
+- Agent runtime behavior: `skills/agent-vault-cli/`.
