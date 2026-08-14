@@ -102,6 +102,7 @@ Example:
 	c.Flags().Bool("no-firewall", false, "Skip iptables egress rules inside the container (requires --isolation=container; debug only)")
 	c.Flags().Bool("home-volume-shared", false, "Share /home/claude/.claude across invocations (requires --isolation=container); default is a per-invocation volume, losing auth state but avoiding concurrency corruption")
 	c.Flags().Bool("share-agent-dir", false, "Bind-mount the host's agent state dir (~/.claude) into the container so it reuses your host login (requires --isolation=container; mutually exclusive with --home-volume-shared)")
+	c.Flags().Bool("no-skills", false, "Skip installing or updating Agent Vault skill files for recognized agents (also respects AGENT_VAULT_NO_SKILLS)")
 
 	return c
 }
@@ -223,10 +224,14 @@ func runCmdRunE(cmd *cobra.Command, args []string) error {
 	env = newEnv
 	fmt.Fprintf(os.Stderr, "%s routing HTTP/HTTPS through MITM proxy (%s)\n", successText("agent-vault:"), net.JoinHostPort(resolveMITMHost(addr), strconv.Itoa(mitmPort)))
 
-	// 7. If the target command is a supported agent, offer to install the
-	//    Agent Vault skill (only when not already present).
+	// 7. If the target command is a supported agent, install or update the
+	//    Agent Vault skill unless installation was disabled.
+	noSkills, err := resolveNoSkills(cmd)
+	if err != nil {
+		return err
+	}
 	if name, dir, ok := agentSkillDir(args[0]); ok {
-		maybeInstallSkills(name, dir)
+		maybeInstallSkillsIfEnabled(noSkills, name, dir)
 		if name == "OpenClaw" {
 			maybeConfigureOpenClaw()
 		}
@@ -339,6 +344,32 @@ func maybeInstallSkills(agentName, baseDir string) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "%s Installed Agent Vault skills for %s.\n", successText("agent-vault:"), agentName)
+}
+
+func maybeInstallSkillsIfEnabled(noSkills bool, agentName, baseDir string) {
+	if !noSkills {
+		maybeInstallSkills(agentName, baseDir)
+	}
+}
+
+func resolveNoSkills(cmd *cobra.Command) (bool, error) {
+	noSkills, err := cmd.Flags().GetBool("no-skills")
+	if err != nil {
+		return false, err
+	}
+	if cmd.Flags().Changed("no-skills") {
+		return noSkills, nil
+	}
+
+	value := os.Getenv("AGENT_VAULT_NO_SKILLS")
+	if value == "" {
+		return noSkills, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("AGENT_VAULT_NO_SKILLS: %w", err)
+	}
+	return enabled, nil
 }
 
 // maybeConfigureOpenClaw ensures OpenClaw's managed proxy and trusted env

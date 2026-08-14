@@ -21,7 +21,7 @@ import (
 var expectedRunFlags = []string{
 	"address", "ttl", "vault",
 	"isolation", "image", "mount", "keep", "no-firewall",
-	"home-volume-shared", "share-agent-dir",
+	"home-volume-shared", "share-agent-dir", "no-skills",
 }
 
 func TestRunFlagsRegistered(t *testing.T) {
@@ -77,6 +77,58 @@ func TestMaybeInstallSkillsInstallsCompleteSkill(t *testing.T) {
 		if !strings.Contains(string(content), marker) {
 			t.Errorf("installed skill file %s does not contain %q", path, marker)
 		}
+	}
+}
+
+func TestResolveNoSkills(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		args    []string
+		want    bool
+		wantErr string
+	}{
+		{name: "defaults false"},
+		{name: "environment enables", env: "true", want: true},
+		{name: "environment disables", env: "false"},
+		{name: "explicit true overrides environment", env: "false", args: []string{"--no-skills"}, want: true},
+		{name: "explicit false overrides environment", env: "true", args: []string{"--no-skills=false"}},
+		{name: "invalid environment rejected", env: "sometimes", wantErr: "AGENT_VAULT_NO_SKILLS"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENT_VAULT_NO_SKILLS", tc.env)
+			cmd := newRunCmdForTest()
+			if err := cmd.ParseFlags(tc.args); err != nil {
+				t.Fatalf("ParseFlags(%v): %v", tc.args, err)
+			}
+
+			got, err := resolveNoSkills(cmd)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveNoSkills() error = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveNoSkills(): %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveNoSkills() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMaybeInstallSkillsIfEnabledNoSkillsPreservesFilesystem(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	maybeInstallSkillsIfEnabled(true, "Test Agent", ".test-agent")
+
+	if _, err := os.Stat(filepath.Join(home, ".test-agent")); !os.IsNotExist(err) {
+		t.Fatalf("skill directory should not be created, stat error: %v", err)
 	}
 }
 
