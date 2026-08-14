@@ -28,8 +28,8 @@ package mitm
 
 import (
 	"context"
-	"log/slog"
 	"crypto/tls"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -182,5 +182,15 @@ func (p *Proxy) dispatch(w http.ResponseWriter, r *http.Request) {
 	// etc. all land here. The CONNECT-vs-forward split above already
 	// covers every legitimate forward-proxy shape; anything else is a
 	// malformed request, not a method-not-allowed.
-	http.Error(w, "this endpoint is an HTTP forward proxy; non-CONNECT requests must use absolute-form URLs (http://host/path). Use CONNECT for https:// upstreams.", http.StatusBadRequest)
+	writeMITMError(w, http.StatusBadRequest, "this endpoint is an HTTP forward proxy; non-CONNECT requests must use absolute-form URLs (http://host/path). Use CONNECT for https:// upstreams.")
+}
+
+func writeMITMError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set(brokercore.ProxyErrorHeader, "true")
+	http.Error(w, "Agent Vault: "+message, status)
+}
+
+func writeMITMRateLimitDenial(w http.ResponseWriter, decision ratelimit.Decision, message string) {
+	w.Header().Set(brokercore.ProxyErrorHeader, "true")
+	ratelimit.WriteDenial(w, decision, "Agent Vault: "+message)
 }

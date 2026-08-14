@@ -54,7 +54,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// is exempt — see isLoopbackPeer.
 	if p.rateLimit != nil && !isLoopbackPeer(r) {
 		if d := p.rateLimit.Check(ratelimit.TierAuth, mitmIPKey(r)); !d.Allow {
-			ratelimit.WriteDenial(w, d, "Too many CONNECT attempts")
+			writeMITMRateLimitDenial(w, d, "Too many CONNECT attempts")
 			return
 		}
 	}
@@ -62,12 +62,12 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	target := r.Host
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
-		http.Error(w, "CONNECT target must be host:port", http.StatusBadRequest)
+		writeMITMError(w, http.StatusBadRequest, "CONNECT target must be host:port")
 		return
 	}
 	port, _ := strconv.Atoi(portStr)
 	if !isValidHost(host) {
-		http.Error(w, "invalid host", http.StatusBadRequest)
+		writeMITMError(w, http.StatusBadRequest, "invalid host")
 		return
 	}
 
@@ -89,13 +89,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+		writeMITMError(w, http.StatusInternalServerError, "hijacking not supported")
 		return
 	}
 
 	clientConn, _, err := hj.Hijack()
 	if err != nil {
-		http.Error(w, "hijack failed", http.StatusInternalServerError)
+		writeMITMError(w, http.StatusInternalServerError, "hijack failed")
 		return
 	}
 
@@ -170,7 +170,7 @@ func (p *Proxy) recordAuthFailure(r *http.Request) {
 // well-behaved clients re-issue the CONNECT with credentials.
 func writeProxyAuthChallenge(w http.ResponseWriter, msg string) {
 	w.Header().Set("Proxy-Authenticate", `Basic realm="agent-vault"`)
-	http.Error(w, msg, http.StatusProxyAuthRequired)
+	writeMITMError(w, http.StatusProxyAuthRequired, msg)
 }
 
 // writeAuthError maps a brokercore session-resolution error to an HTTP
@@ -181,14 +181,14 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		writeProxyAuthChallenge(w, "invalid or expired session")
 	case errors.Is(err, brokercore.ErrAgentVaultAmbiguous),
 		errors.Is(err, brokercore.ErrNoVaultContext):
-		http.Error(w, "set vault via HTTPS_PROXY=http://<token>:<vault>@host:port", http.StatusBadRequest)
+		writeMITMError(w, http.StatusBadRequest, "set vault via HTTPS_PROXY=http://<token>:<vault>@host:port")
 	case errors.Is(err, brokercore.ErrVaultHintMismatch),
 		errors.Is(err, brokercore.ErrVaultAccessDenied):
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeMITMError(w, http.StatusForbidden, "forbidden")
 	case errors.Is(err, brokercore.ErrVaultNotFound):
-		http.Error(w, "vault not found", http.StatusNotFound)
+		writeMITMError(w, http.StatusNotFound, "vault not found")
 	default:
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeMITMError(w, http.StatusInternalServerError, "internal error")
 	}
 }
 

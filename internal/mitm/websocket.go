@@ -123,7 +123,7 @@ func (p *Proxy) forwardWebSocket(
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		_ = upstreamConn.Close()
-		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+		writeMITMError(w, http.StatusInternalServerError, "hijacking not supported")
 		emit(http.StatusInternalServerError, "internal")
 		return
 	}
@@ -131,7 +131,7 @@ func (p *Proxy) forwardWebSocket(
 	clientConn, clientBuf, err := hj.Hijack()
 	if err != nil {
 		_ = upstreamConn.Close()
-		http.Error(w, "hijack failed", http.StatusInternalServerError)
+		writeMITMError(w, http.StatusInternalServerError, "hijack failed")
 		emit(http.StatusInternalServerError, "internal")
 		return
 	}

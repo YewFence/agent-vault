@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -207,6 +208,9 @@ func TestMITMInjectsCredentials(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get(brokercore.ProxyErrorHeader); got != "" {
+		t.Fatalf("upstream response unexpectedly marked as Agent Vault error: %q", got)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "upstream-body" {
@@ -1190,6 +1194,13 @@ func TestMITMMissingProxyAuth(t *testing.T) {
 	if ch := resp.Header.Get("Proxy-Authenticate"); !strings.Contains(ch, "Basic") {
 		t.Fatalf("Proxy-Authenticate = %q, want a Basic challenge", ch)
 	}
+	if got := resp.Header.Get(brokercore.ProxyErrorHeader); got != "true" {
+		t.Fatalf("%s = %q, want true", brokercore.ProxyErrorHeader, got)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "Agent Vault") {
+		t.Fatalf("body = %q, want Agent Vault identifier", body)
+	}
 }
 
 func TestMITMInvalidSession(t *testing.T) {
@@ -1217,8 +1228,49 @@ func TestMITMAmbiguousAgentVault(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
+	if got := resp.Header.Get(brokercore.ProxyErrorHeader); got != "true" {
+		t.Fatalf("%s = %q, want true", brokercore.ProxyErrorHeader, got)
+	}
+	if !strings.Contains(string(body), "Agent Vault") {
+		t.Fatalf("body = %q, want Agent Vault identifier", body)
+	}
 	if !strings.Contains(string(body), "HTTPS_PROXY=http://<token>:<vault>@") {
 		t.Fatalf("body = %q, missing vault-hint message", body)
+	}
+}
+
+func TestMITMRateLimitDenialIdentifiesAgentVault(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeMITMRateLimitDenial(recorder, ratelimit.Decision{}, "too many proxy requests")
+
+	if got := recorder.Header().Get(brokercore.ProxyErrorHeader); got != "true" {
+		t.Fatalf("%s = %q, want true", brokercore.ProxyErrorHeader, got)
+	}
+	if !strings.Contains(recorder.Body.String(), "Agent Vault") {
+		t.Fatalf("body = %q, want Agent Vault identifier", recorder.Body.String())
+	}
+}
+
+func TestMITMUpstreamFailureIdentifiesAgentVault(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	status, code := writeUpstreamFailure(recorder, errors.New("upstream unavailable"))
+
+	if status != http.StatusBadGateway || code != "upstream_error" {
+		t.Fatalf("result = (%d, %q), want (502, upstream_error)", status, code)
+	}
+	if got := recorder.Header().Get(brokercore.ProxyErrorHeader); got != "true" {
+		t.Fatalf("%s = %q, want true", brokercore.ProxyErrorHeader, got)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["error"] != "upstream_error" {
+		t.Fatalf("body.error = %q, want upstream_error", body["error"])
+	}
+	if !strings.Contains(body["message"], "Agent Vault") {
+		t.Fatalf("body.message = %q, want Agent Vault identifier", body["message"])
 	}
 }
 

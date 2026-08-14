@@ -3,6 +3,7 @@ package brokercore
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -276,7 +277,7 @@ func TestForbiddenHintBody(t *testing.T) {
 		t.Fatalf("error = %v", body["error"])
 	}
 	msg, ok := body["message"].(string)
-	if !ok || !strings.Contains(msg, `"api.example.com"`) || !strings.Contains(msg, `"default"`) {
+	if !ok || !strings.Contains(msg, "Agent Vault") || !strings.Contains(msg, `"api.example.com"`) || !strings.Contains(msg, `"default"`) {
 		t.Fatalf("message = %v", body["message"])
 	}
 	hint, ok := body["proposal_hint"].(map[string]interface{})
@@ -305,6 +306,22 @@ func TestForbiddenHintBody(t *testing.T) {
 	// Must be JSON-serializable (used as the MITM ingress response body).
 	if _, err := json.Marshal(body); err != nil {
 		t.Fatalf("marshal: %v", err)
+	}
+}
+
+func TestWriteProxyErrorIdentifiesAgentVault(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	WriteProxyError(recorder, http.StatusBadGateway, "upstream_error", "bad gateway")
+
+	if got := recorder.Header().Get(ProxyErrorHeader); got != "true" {
+		t.Fatalf("%s = %q, want true", ProxyErrorHeader, got)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if !strings.Contains(body["message"], "Agent Vault") {
+		t.Fatalf("message = %q, want Agent Vault identifier", body["message"])
 	}
 }
 

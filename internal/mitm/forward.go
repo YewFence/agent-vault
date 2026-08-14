@@ -37,7 +37,8 @@ func writeUpstreamFailure(w http.ResponseWriter, err error) (int, string) {
 			"The requested destination is blocked by the proxy network policy.")
 		return http.StatusForbidden, "ssrf_blocked"
 	}
-	http.Error(w, "bad gateway", http.StatusBadGateway)
+	brokercore.WriteProxyError(w, http.StatusBadGateway, "upstream_error",
+		"the proxy could not reach the upstream service")
 	return http.StatusBadGateway, "upstream_error"
 }
 
@@ -97,7 +98,7 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	// TierAuth budget and key shape with CONNECT. Loopback is exempt.
 	if p.rateLimit != nil && !isLoopbackPeer(r) {
 		if d := p.rateLimit.Check(ratelimit.TierAuth, mitmIPKey(r)); !d.Allow {
-			ratelimit.WriteDenial(w, d, "Too many proxy requests")
+			writeMITMRateLimitDenial(w, d, "Too many proxy requests")
 			return
 		}
 	}
@@ -118,13 +119,13 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	}
 	portNum, err := strconv.Atoi(portStr)
 	if err != nil {
-		http.Error(w, "invalid port", http.StatusBadRequest)
+		writeMITMError(w, http.StatusBadRequest, "invalid port")
 		return
 	}
 	target := net.JoinHostPort(host, portStr)
 
 	if !isValidHost(host) {
-		http.Error(w, "invalid host", http.StatusBadRequest)
+		writeMITMError(w, http.StatusBadRequest, "invalid host")
 		return
 	}
 
@@ -223,7 +224,7 @@ func (p *Proxy) forwardRequest(
 
 	enf := p.rateLimit.EnforceProxy(r.Context(), scope.ActorID(), scope.VaultID)
 	if !enf.Allowed {
-		ratelimit.WriteDenial(w, enf.Decision, enf.Message)
+		writeMITMRateLimitDenial(w, enf.Decision, enf.Message)
 		emit(http.StatusTooManyRequests, enf.ErrCode)
 		return
 	}
@@ -244,7 +245,7 @@ func (p *Proxy) forwardRequest(
 	}
 
 	if r.ContentLength > 0 && r.ContentLength > p.maxRequestBytes {
-		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		writeMITMError(w, http.StatusRequestEntityTooLarge, http.StatusText(http.StatusRequestEntityTooLarge))
 		emit(http.StatusRequestEntityTooLarge, "request_too_large")
 		return
 	}
@@ -282,7 +283,7 @@ func (p *Proxy) forwardRequest(
 		body, contentLength, err = brokercore.MaterializeRequestBody(r.Body)
 		if err != nil {
 			status, code := brokercore.RequestBodyErrorCode(err)
-			http.Error(w, http.StatusText(status), status)
+			writeMITMError(w, status, http.StatusText(status))
 			emit(status, code)
 			return
 		}
@@ -290,7 +291,7 @@ func (p *Proxy) forwardRequest(
 
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), body)
 	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		writeMITMError(w, http.StatusBadGateway, "bad gateway")
 		emit(http.StatusBadGateway, "internal")
 		return
 	}
@@ -307,7 +308,7 @@ func (p *Proxy) forwardRequest(
 	}
 
 	if err := brokercore.ApplySubstitutions(outReq.URL, outReq.Header, inject.Substitutions); err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		writeMITMError(w, http.StatusBadGateway, "bad gateway")
 		emit(http.StatusBadGateway, "substitution_error")
 		return
 	}
@@ -322,7 +323,7 @@ func (p *Proxy) forwardRequest(
 			outReq.Body, outReq.ContentLength,
 			outReq.Header.Get("Content-Type"), inject.Substitutions)
 		if bErr != nil {
-			http.Error(w, "bad gateway", http.StatusBadGateway)
+			writeMITMError(w, http.StatusBadGateway, "bad gateway")
 			emit(http.StatusBadGateway, "substitution_error")
 			return
 		}
