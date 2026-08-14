@@ -260,11 +260,13 @@ See the [TypeScript SDK README](sdks/sdk-typescript/README.md) for full document
 ## Development
 
 ```bash
-make build      # Build frontend + Go binary
-make test       # Run tests
-make web-dev    # Vite dev server with hot reload (port 5173)
-make dev        # Go + Vite dev servers with hot reload
-make docker     # Build Docker image
+mise install             # Install the pinned development toolchain
+mise run web:setup       # Install frontend dependencies
+mise run build           # Build frontend + Go binary
+mise run test            # Run Go tests
+mise run dev:web         # Vite dev server with hot reload (port 5174)
+mise run dev             # Go + Vite dev servers with hot reload
+mise run docker:build    # Build Docker image
 ```
 
 ## Open-source vs. paid

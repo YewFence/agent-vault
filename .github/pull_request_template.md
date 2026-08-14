@@ -14,7 +14,7 @@
 
 <!-- How did you verify this works? -->
 
-- [ ] Existing tests pass (`make test`)
+- [ ] Existing tests pass (`mise run test`)
 - [ ] Added/updated tests for new behavior
 - [ ] Manual testing (describe below)
 

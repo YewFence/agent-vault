@@ -1,18 +1,23 @@
 [env]
 AGENT_VAULT_PORT = 14321
-AGENT_VAULT_MIIM_PORT = 14322
-AGENT_VAULT_TELEMETRY=false
-AGENT_VAULT_HOME="$PWD/dev"
+AGENT_VAULT_MITM_PORT = 14322
+AGENT_VAULT_TELEMETRY = false
+AGENT_VAULT_HOME = "$PWD/dev"
 
-[tasks."dev:setup"]
+[tasks."web:setup"]
 description = "Install the web development dependencies"
 run = "aube -C web ci"
+
+[tasks."web:build"]
+description = "Build the React frontend"
+depends = ["web:setup"]
+run = "aube -C web run build"
 
 [tasks."dev:api"]
 description = "Run an isolated Agent Vault API with Go hot reload"
 run = '''
 AGENT_VAULT_ADDR=http://127.0.0.1:$AGENT_VAULT_PORT \
-air -- server --port $AGENT_VAULT_PORT --mitm-port $AGENT_VAULT_MIIM_PORT
+air -- server --port $AGENT_VAULT_PORT --mitm-port $AGENT_VAULT_MITM_PORT
 '''
 
 [tasks."dev:web"]
@@ -24,8 +29,102 @@ run = "aube -C web run dev -- --port 5174"
 description = "Run the isolated Agent Vault API and Vite frontend together"
 run = [{ tasks = ["dev:api", "dev:web"] }]
 
+[tasks.build]
+description = "Build the frontend and Agent Vault binary"
+depends = ["web:build"]
+run = '''
+version="$(git describe --tags --always --dirty 2>/dev/null || printf dev)"
+commit="$(git rev-parse --short HEAD 2>/dev/null || printf unknown)"
+build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+go build -trimpath \
+  -ldflags "-s -w \
+    -X github.com/Infisical/agent-vault/cmd.version=$version \
+    -X github.com/Infisical/agent-vault/cmd.commit=$commit \
+    -X github.com/Infisical/agent-vault/cmd.date=$build_date \
+    -X github.com/Infisical/agent-vault/cmd.posthogAPIKey=${POSTHOG_API_KEY:-}" \
+  -o agent-vault .
+'''
+
+[tasks.test]
+description = "Run the Go test suite"
+run = "go test ./..."
+
+[tasks."lint:go"]
+description = "Lint the Go code"
+run = "golangci-lint run ./..."
+
+[tasks."lint:web"]
+description = "Typecheck the web frontend"
+run = "aube -C web exec tsc --noEmit"
+
+[tasks.lint]
+description = "Run Go linting and web typechecking"
+run = [
+  { task = "lint:go" },
+  { task = "lint:web" },
+]
+
+[tasks.coverage]
+description = "Generate and summarize Go test coverage"
+run = [
+  "go test -coverprofile=coverage.out ./...",
+  "go tool cover -func=coverage.out",
+]
+
+[tasks.check]
+description = "Run the Go tests and all linters"
+run = [
+  { task = "test" },
+  { task = "lint" },
+]
+
+[tasks.clean]
+description = "Remove local build artifacts"
+run = '''
+rm -f ./agent-vault
+rm -rf ./internal/server/webdist
+'''
+
+[tasks."sdk:setup"]
+description = "Install the TypeScript SDK dependencies"
+run = "aube -C sdks/sdk-typescript ci"
+
+[tasks."sdk:build"]
+description = "Build the TypeScript SDK"
+depends = ["sdk:setup"]
+run = "aube -C sdks/sdk-typescript run build"
+
+[tasks."sdk:test"]
+description = "Test the TypeScript SDK"
+depends = ["sdk:setup"]
+run = "aube -C sdks/sdk-typescript test"
+
+[tasks."sdk:typecheck"]
+description = "Typecheck the TypeScript SDK"
+depends = ["sdk:setup"]
+run = "aube -C sdks/sdk-typescript run typecheck"
+
+[tasks."sdk:check"]
+description = "Typecheck, test, and build the TypeScript SDK"
+depends = ["sdk:typecheck", "sdk:test", "sdk:build"]
+
+[tasks."docker:build"]
+description = "Build the Agent Vault Docker image"
+run = '''
+version="$(git describe --tags --always --dirty 2>/dev/null || printf dev)"
+commit="$(git rev-parse --short HEAD 2>/dev/null || printf unknown)"
+build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+docker build \
+  --build-arg VERSION="$version" \
+  --build-arg COMMIT="$commit" \
+  --build-arg BUILD_DATE="$build_date" \
+  -t infisical/agent-vault .
+'''
+
 [tasks.install]
-description = "Install it from source code to my dev machine via mise link"
+description = "Install Agent Vault from source via mise link"
 run = """
 go build -trimpath -o ./bin/agent-vault
 mise link github:infisical/agent-vault@dev "$PWD/bin"

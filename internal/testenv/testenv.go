@@ -1,7 +1,7 @@
 // Package testenv keeps tests hermetic from the developer's shell
 // environment. Agent Vault is configured through AGENT_VAULT_* variables,
 // and developers routinely export them via mise, direnv, or
-// `infisical run -- make test`. Left in place they leak runtime config —
+// `infisical run -- mise run test`. Left in place they leak runtime config —
 // data directory, server address, tokens — into tests that assume
 // defaults (e.g. ~/.agent-vault paths), causing failures that have
 // nothing to do with the code under test.
