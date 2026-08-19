@@ -1,9 +1,23 @@
 package netguard
 
 import (
+	"context"
+	"errors"
 	"net"
 	"testing"
 )
+
+func TestSafeDialContext_BlockedDestinationIsIdentifiable(t *testing.T) {
+	dial := SafeDialContext(false)
+	conn, err := dial(context.Background(), "tcp", "127.0.0.1:80")
+	if conn != nil {
+		_ = conn.Close()
+		t.Fatal("dial returned a connection to a blocked destination")
+	}
+	if !errors.Is(err, ErrNetworkPolicyBlocked) {
+		t.Fatalf("error = %v, want ErrNetworkPolicyBlocked", err)
+	}
+}
 
 func TestIsBlockedIP_AlwaysBlocked(t *testing.T) {
 	// IMDS endpoints are blocked regardless of policy (allowlist does NOT bypass).

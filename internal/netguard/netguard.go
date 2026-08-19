@@ -2,6 +2,7 @@ package netguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrNetworkPolicyBlocked identifies destinations rejected before dialing.
+var ErrNetworkPolicyBlocked = errors.New("network policy blocked destination")
 
 // AllowPrivateFromEnv reads AGENT_VAULT_ALLOW_PRIVATE_RANGES and returns whether
 // the proxy should allow connections to private/reserved IP ranges (RFC-1918,
@@ -190,8 +194,8 @@ func SafeDialContext(allowPrivate bool) func(ctx context.Context, network, addr 
 		// Check all resolved IPs before connecting.
 		for _, ipAddr := range ips {
 			if isBlockedIP(ipAddr.IP, allowPrivate, allowed) {
-				return nil, fmt.Errorf("netguard: connection to %s (%s) blocked by network policy",
-					host, ipAddr.IP.String())
+				return nil, fmt.Errorf("netguard: connection to %s (%s): %w",
+					host, ipAddr.IP.String(), ErrNetworkPolicyBlocked)
 			}
 		}
 

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -451,7 +452,8 @@ func TestMITMForwardSSRFLoopbackBlocked(t *testing.T) {
 	cp := &fakeCredProvider{byHost: map[string]fakeInjectResult{
 		upstreamHost: {result: &brokercore.InjectResult{Passthrough: true}},
 	}}
-	proxyURL, clientRoots, p := setupProxy(t, sr, cp)
+	sink := &recordingSink{}
+	proxyURL, clientRoots, p := setupProxy(t, sr, cp, func(o *Options) { o.LogSink = sink })
 	// Override the dialler with a stricter SafeDialContext that blocks
 	// loopback (setupProxy seeded ALLOW_PRIVATE_RANGES=true for the
 	// other tests; we bypass that policy here directly).
@@ -463,8 +465,173 @@ func TestMITMForwardSSRFLoopbackBlocked(t *testing.T) {
 		t.Fatalf("client.Get: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (loopback blocked at dial)", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (loopback blocked by network policy)", resp.StatusCode)
+	}
+	if resp.Header.Get(brokercore.ProxyErrorHeader) != "true" {
+		t.Fatalf("missing %s header", brokercore.ProxyErrorHeader)
+	}
+	var errorBody map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&errorBody); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errorBody["error"] != "ssrf_blocked" {
+		t.Fatalf("response error = %q, want ssrf_blocked", errorBody["error"])
+	}
+
+	rows := sink.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("got %d log records, want 1", len(rows))
+	}
+	if rows[0].ErrorCode != "ssrf_blocked" {
+		t.Fatalf("ErrorCode = %q, want ssrf_blocked", rows[0].ErrorCode)
+	}
+}
+
+func TestMITMConnectSSRFLoopbackBlocked(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "should-not-reach")
+	}))
+	defer upstream.Close()
+
+	upstreamHost, _, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "https://"))
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	cp := &fakeCredProvider{byHost: map[string]fakeInjectResult{
+		upstreamHost: {result: &brokercore.InjectResult{Passthrough: true}},
+	}}
+	sink := &recordingSink{}
+	proxyURL, clientRoots, p := setupProxy(t, sr, cp, func(o *Options) { o.LogSink = sink })
+	p.upstream.DialContext = netguard.SafeDialContext(false)
+
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+	resp, err := client.Get(upstream.URL + "/x")
+	if err != nil {
+		t.Fatalf("client.Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (loopback blocked by network policy)", resp.StatusCode)
+	}
+
+	rows := sink.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("got %d log records, want 1", len(rows))
+	}
+	if rows[0].ErrorCode != "ssrf_blocked" {
+		t.Fatalf("ErrorCode = %q, want ssrf_blocked", rows[0].ErrorCode)
+	}
+}
+
+func TestMITMForwardWebSocketSSRFLoopbackBlocked(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "should-not-reach")
+	}))
+	defer upstream.Close()
+
+	upstreamHost, _, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	cp := &fakeCredProvider{byHost: map[string]fakeInjectResult{
+		upstreamHost: {result: &brokercore.InjectResult{Passthrough: true}},
+	}}
+	sink := &recordingSink{}
+	proxyURL, _, p := setupProxy(t, sr, cp, func(o *Options) { o.LogSink = sink })
+	p.upstream.DialContext = netguard.SafeDialContext(false)
+
+	conn := dialProxy(t, proxyURL)
+	defer conn.Close()
+	auth := base64.StdEncoding.EncodeToString([]byte("av_sess_ok:"))
+	_, _ = fmt.Fprintf(conn,
+		"GET %s/ws HTTP/1.1\r\n"+
+			"Host: %s\r\n"+
+			"Proxy-Authorization: Basic %s\r\n"+
+			"Upgrade: websocket\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+			"Sec-WebSocket-Version: 13\r\n\r\n",
+		upstream.URL, upstreamHost, auth)
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (loopback blocked by network policy)", resp.StatusCode)
+	}
+	var errorBody map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&errorBody); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errorBody["error"] != "ssrf_blocked" {
+		t.Fatalf("response error = %q, want ssrf_blocked", errorBody["error"])
+	}
+
+	rows := sink.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("got %d log records, want 1", len(rows))
+	}
+	if rows[0].ErrorCode != "ssrf_blocked" {
+		t.Fatalf("ErrorCode = %q, want ssrf_blocked", rows[0].ErrorCode)
+	}
+}
+
+func TestMITMForwardInjectErrorsUseConsistentResponseAndLogSemantics(t *testing.T) {
+	tests := []struct {
+		name             string
+		err              error
+		wantStatus       int
+		wantResponseCode string
+		wantLogCode      string
+	}{
+		{name: "service not found", err: brokercore.ErrServiceNotFound, wantStatus: http.StatusForbidden, wantResponseCode: "forbidden", wantLogCode: "no_match"},
+		{name: "service disabled", err: brokercore.ErrServiceDisabled, wantStatus: http.StatusForbidden, wantResponseCode: "service_disabled", wantLogCode: "service_disabled"},
+		{name: "credential missing", err: brokercore.ErrCredentialMissing, wantStatus: http.StatusBadGateway, wantResponseCode: "credential_not_found", wantLogCode: "credential_not_found"},
+		{name: "oauth not connected", err: brokercore.ErrOAuthNotConnected, wantStatus: http.StatusBadGateway, wantResponseCode: "oauth_not_connected", wantLogCode: "oauth_not_connected"},
+		{name: "oauth refresh failed", err: brokercore.ErrOAuthRefreshFailed, wantStatus: http.StatusBadGateway, wantResponseCode: "oauth_refresh_failed", wantLogCode: "oauth_refresh_failed"},
+		{name: "internal", err: fmt.Errorf("unexpected injection failure"), wantStatus: http.StatusInternalServerError, wantResponseCode: "internal", wantLogCode: "internal"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sr := validTokenResolver("av_sess_ok",
+				&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+			cp := &fakeCredProvider{byHost: map[string]fakeInjectResult{
+				"service.example": {err: tt.err},
+			}}
+			sink := &recordingSink{}
+			proxyURL, clientRoots, _ := setupProxy(t, sr, cp, func(o *Options) { o.LogSink = sink })
+
+			client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+			resp, err := client.Get("http://service.example/x")
+			if err != nil {
+				t.Fatalf("client.Get: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("response status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			var errorBody map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&errorBody); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if errorBody["error"] != tt.wantResponseCode {
+				t.Errorf("response error = %v, want %q", errorBody["error"], tt.wantResponseCode)
+			}
+
+			rows := sink.snapshot()
+			if len(rows) != 1 {
+				t.Fatalf("got %d log records, want 1", len(rows))
+			}
+			if rows[0].Status != tt.wantStatus {
+				t.Errorf("log status = %d, want %d", rows[0].Status, tt.wantStatus)
+			}
+			if rows[0].ErrorCode != tt.wantLogCode {
+				t.Errorf("log ErrorCode = %q, want %q", rows[0].ErrorCode, tt.wantLogCode)
+			}
+		})
 	}
 }
 

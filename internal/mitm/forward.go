@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
 )
@@ -28,6 +29,16 @@ func (fw *flushingWriter) Write(p []byte) (int, error) {
 		fw.f.Flush()
 	}
 	return n, err
+}
+
+func writeUpstreamFailure(w http.ResponseWriter, err error) (int, string) {
+	if errors.Is(err, netguard.ErrNetworkPolicyBlocked) {
+		brokercore.WriteProxyError(w, http.StatusForbidden, "ssrf_blocked",
+			"The requested destination is blocked by the proxy network policy.")
+		return http.StatusForbidden, "ssrf_blocked"
+	}
+	http.Error(w, "bad gateway", http.StatusBadGateway)
+	return http.StatusBadGateway, "upstream_error"
 }
 
 // actorFromScope returns the (type, id) pair used in request log rows.
@@ -248,15 +259,12 @@ func (p *Proxy) forwardRequest(
 		event.Passthrough = inject.Passthrough
 	}
 	if err != nil {
-		errCode := "no_match"
-		status := http.StatusForbidden
+		semantics := brokercore.ClassifyInjectError(err)
 		if errors.Is(err, brokercore.ErrCredentialMissing) {
-			errCode = "credential_not_found"
-			status = http.StatusBadGateway
 			brokercore.LogCredentialMissing(p.logger, scope.VaultID, event.MatchedService, event.CredentialKeys)
 		}
 		brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
-		emit(status, errCode)
+		emit(semantics.Status, semantics.LogCode)
 		return
 	}
 
@@ -342,8 +350,8 @@ func (p *Proxy) forwardRequest(
 			slog.String("target_host", target),
 			slog.String("error", err.Error()),
 		)
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		emit(http.StatusBadGateway, "upstream_error")
+		status, code := writeUpstreamFailure(w, err)
+		emit(status, code)
 		return
 	}
 

@@ -1,10 +1,14 @@
 package mitm
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -19,12 +23,73 @@ type fakeConn struct {
 	io.Writer
 }
 
-func (fakeConn) Close() error                       { return nil }
-func (fakeConn) LocalAddr() net.Addr                { return nil }
-func (fakeConn) RemoteAddr() net.Addr               { return nil }
-func (fakeConn) SetDeadline(time.Time) error        { return nil }
-func (fakeConn) SetReadDeadline(time.Time) error    { return nil }
-func (fakeConn) SetWriteDeadline(time.Time) error   { return nil }
+func (fakeConn) Close() error                     { return nil }
+func (fakeConn) LocalAddr() net.Addr              { return nil }
+func (fakeConn) RemoteAddr() net.Addr             { return nil }
+func (fakeConn) SetDeadline(time.Time) error      { return nil }
+func (fakeConn) SetReadDeadline(time.Time) error  { return nil }
+func (fakeConn) SetWriteDeadline(time.Time) error { return nil }
+
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
+type hijackResponseWriter struct {
+	header http.Header
+	conn   net.Conn
+}
+
+func (w *hijackResponseWriter) Header() http.Header { return w.header }
+func (*hijackResponseWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+func (*hijackResponseWriter) WriteHeader(int) {}
+func (w *hijackResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
+
+func TestForwardWebSocketClientWriteFailureUsesClientErrorSemantics(t *testing.T) {
+	proxySide, upstreamSide := net.Pipe()
+	defer proxySide.Close()
+	defer upstreamSide.Close()
+
+	go func() {
+		reader := bufio.NewReader(upstreamSide)
+		if _, err := http.ReadRequest(reader); err != nil {
+			return
+		}
+		_, _ = io.WriteString(upstreamSide,
+			"HTTP/1.1 101 Switching Protocols\r\n"+
+				"Upgrade: websocket\r\n"+
+				"Connection: Upgrade\r\n\r\n")
+	}()
+
+	p := &Proxy{upstream: &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+		return proxySide, nil
+	}}}
+	req, err := http.NewRequest(http.MethodGet, "http://example.com/socket", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+
+	clientConn := fakeConn{Reader: strings.NewReader(""), Writer: errorWriter{}}
+	w := &hijackResponseWriter{header: make(http.Header), conn: clientConn}
+	gotStatus := 0
+	gotCode := ""
+	p.forwardWebSocket(w, req, req, nil, func(status int, code string) {
+		gotStatus = status
+		gotCode = code
+	})
+
+	if gotStatus != http.StatusSwitchingProtocols {
+		t.Errorf("status = %d, want 101", gotStatus)
+	}
+	if gotCode != "client_write_error" {
+		t.Errorf("error code = %q, want client_write_error", gotCode)
+	}
+}
 
 func maskedTextFrame(t *testing.T, text string) []byte {
 	t.Helper()

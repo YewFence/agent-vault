@@ -56,6 +56,10 @@ placeholder values.
 - `403` with `proposal_hint` means the target is not configured for this vault.
   Explain the missing access to the user. Do not create a proposal automatically.
 - `403` with `service_disabled` requires an operator to enable the service.
+- `403` with `ssrf_blocked` means Agent Vault's network policy rejected the
+  destination before contacting it. Report the blocked destination and ask an
+  operator to review the private-range policy or narrow network allowlist; do
+  not retry blindly.
 - `502` may mean a credential is missing, the upstream is unreachable, or an
   OAuth connection needs attention. Report the structured error code and the
   local checks already performed instead of retrying blindly.

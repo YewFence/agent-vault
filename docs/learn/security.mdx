@@ -83,7 +83,7 @@ Agent Vault includes a network guard that validates every outbound proxy connect
 
 ### Policy
 
-Outbound proxy connections are validated against the resolved IP. By default, every RFC-1918, loopback, link-local, IPv6 ULA, and CGN range is blocked, plus cloud metadata endpoints. Set `AGENT_VAULT_ALLOW_PRIVATE_RANGES=true` for local/trusted deployments where the proxy needs to reach internal services on private IPs. To keep the block on but punch narrow holes for known internal services, set `AGENT_VAULT_NETWORK_ALLOWLIST=10.163.0.0/16,192.168.1.1` (CIDRs or bare IPs, comma-separated). Cloud metadata endpoints stay blocked regardless.
+Outbound proxy connections are validated against the resolved IP. By default, every RFC-1918, loopback, link-local, IPv6 ULA, and CGN range is blocked, plus cloud metadata endpoints. A rejected proxy request returns HTTP `403` with error code `ssrf_blocked`, and its request log row records the same error code instead of treating the denial as an upstream failure. Set `AGENT_VAULT_ALLOW_PRIVATE_RANGES=true` for local/trusted deployments where the proxy needs to reach internal services on private IPs. To keep the block on but punch narrow holes for known internal services, set `AGENT_VAULT_NETWORK_ALLOWLIST=10.163.0.0/16,192.168.1.1` (CIDRs or bare IPs, comma-separated). Cloud metadata endpoints stay blocked regardless.
 
 ### Always blocked
 

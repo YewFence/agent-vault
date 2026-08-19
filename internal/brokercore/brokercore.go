@@ -190,28 +190,57 @@ func WriteForbiddenHint(w http.ResponseWriter, targetHost, vaultName, baseURL st
 	_ = json.NewEncoder(w).Encode(ForbiddenHintBody(targetHost, vaultName, baseURL))
 }
 
+// InjectErrorSemantics is the client and audit-log classification for a
+// CredentialProvider.Inject failure. ResponseCode and LogCode differ only for
+// unmatched hosts: clients receive "forbidden" with a proposal hint, while
+// audit rows retain "no_match" for unmatched-host queries.
+type InjectErrorSemantics struct {
+	Status       int
+	ResponseCode string
+	LogCode      string
+}
+
+// ClassifyInjectError keeps proxy responses and request-log rows aligned.
+func ClassifyInjectError(err error) InjectErrorSemantics {
+	switch {
+	case errors.Is(err, ErrServiceNotFound):
+		return InjectErrorSemantics{Status: http.StatusForbidden, ResponseCode: "forbidden", LogCode: "no_match"}
+	case errors.Is(err, ErrServiceDisabled):
+		return InjectErrorSemantics{Status: http.StatusForbidden, ResponseCode: "service_disabled", LogCode: "service_disabled"}
+	case errors.Is(err, ErrOAuthNotConnected):
+		return InjectErrorSemantics{Status: http.StatusBadGateway, ResponseCode: "oauth_not_connected", LogCode: "oauth_not_connected"}
+	case errors.Is(err, ErrOAuthRefreshFailed):
+		return InjectErrorSemantics{Status: http.StatusBadGateway, ResponseCode: "oauth_refresh_failed", LogCode: "oauth_refresh_failed"}
+	case errors.Is(err, ErrCredentialMissing):
+		return InjectErrorSemantics{Status: http.StatusBadGateway, ResponseCode: "credential_not_found", LogCode: "credential_not_found"}
+	default:
+		return InjectErrorSemantics{Status: http.StatusInternalServerError, ResponseCode: "internal", LogCode: "internal"}
+	}
+}
+
 // WriteInjectError maps a CredentialProvider.Inject error to the standard
 // HTTP response on the MITM ingress. baseURL is the externally-reachable
 // control-plane URL for help links. Callers that want to log before
 // responding should do so before calling this helper.
 func WriteInjectError(w http.ResponseWriter, err error, targetHost, vaultName, baseURL string) {
+	semantics := ClassifyInjectError(err)
 	switch {
 	case errors.Is(err, ErrServiceNotFound):
 		WriteForbiddenHint(w, targetHost, vaultName, baseURL)
 	case errors.Is(err, ErrServiceDisabled):
-		writeProxyErrorWithHelp(w, http.StatusForbidden, "service_disabled",
+		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			fmt.Sprintf("Broker service matching host %q in vault %q is currently disabled", targetHost, vaultName), baseURL)
 	case errors.Is(err, ErrOAuthNotConnected):
-		writeProxyErrorWithHelp(w, http.StatusBadGateway, "oauth_not_connected",
+		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			"OAuth credential is approved but not yet connected — complete the connection in the Agent Vault dashboard", baseURL)
 	case errors.Is(err, ErrOAuthRefreshFailed):
-		writeProxyErrorWithHelp(w, http.StatusBadGateway, "oauth_refresh_failed",
+		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			"OAuth token expired and refresh failed — reconnect in the Agent Vault dashboard", baseURL)
 	case errors.Is(err, ErrCredentialMissing):
-		writeProxyErrorWithHelp(w, http.StatusBadGateway, "credential_not_found",
+		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			"A required credential could not be resolved; check vault configuration", baseURL)
 	default:
-		WriteProxyError(w, http.StatusInternalServerError, "internal",
+		WriteProxyError(w, semantics.Status, semantics.ResponseCode,
 			"Failed to resolve broker services")
 	}
 }

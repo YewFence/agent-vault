@@ -61,8 +61,8 @@ func (p *Proxy) forwardWebSocket(
 ) {
 	upstreamConn, upstreamReader, resp, err := p.dialWebSocketUpstream(r.Context(), outReq)
 	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		emit(http.StatusBadGateway, "upstream_error")
+		status, code := writeUpstreamFailure(w, err)
+		emit(status, code)
 		return
 	}
 	defer func() {
@@ -140,7 +140,7 @@ func (p *Proxy) forwardWebSocket(
 	if err := writeWebSocketSwitchingResponse(clientConn, resp); err != nil {
 		_ = clientConn.Close()
 		_ = upstreamConn.Close()
-		emit(http.StatusBadGateway, "upstream_error")
+		emit(resp.StatusCode, "client_write_error")
 		return
 	}
 	_ = clientConn.SetWriteDeadline(time.Time{})

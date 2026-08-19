@@ -163,6 +163,7 @@ See [Proposals](/learn/proposals) for the full proposal lifecycle, including sto
 | 401 | Invalid or expired token | Re-check `AGENT_VAULT_TOKEN`. Contact operator for a new token or [rotation](/agents/overview#rotating-an-agent-token). |
 | 403 `forbidden` | Host not allowed (only fires when the vault has `unmatched_host_policy=deny`; the default is passthrough) | Create a proposal to request access. The response includes a `proposal_hint`. |
 | 403 `service_disabled` | Host is configured but disabled | Surface to the user — don't create a duplicate proposal. |
+| 403 `ssrf_blocked` | The destination resolved to an address blocked by Agent Vault's network policy | Surface the policy denial to the user; don't retry unless an operator changes the private-range policy or network allowlist. |
 | 409 `multiple services match host …` | Service mutation (`PATCH`/`DELETE`) used a bare host that matches several path-scoped services | Retry with the canonical service `name` from `/discover`. The response body includes a `candidates` array. |
 | 429 | Rate limited | Respect the `Retry-After` header. |
 | 502 | Missing credential or upstream unreachable | Tell the user a credential may need to be added. |
