@@ -30,6 +30,13 @@ function slugifyHost(host: string): string {
   return slug;
 }
 
+function isIPTarget(host: string): boolean {
+  const bare = host.split("/", 1)[0].replace(/^\[([^\]]+)\](?::\d+)?$/, "$1");
+  if (bare.includes(":")) return true;
+  const parts = bare.split(".");
+  return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255);
+}
+
 export default function ServicesTab() {
   const { vaultName, vaultRole } = useVaultParams();
   const { preset: presetParam } = useSearch({ strict: false }) as { preset?: string };
@@ -184,6 +191,9 @@ export default function ServicesTab() {
         <div>
           <div className="text-sm font-semibold text-text">{service.name}</div>
           <div className="text-xs text-text-muted mt-0.5">{service.host}</div>
+          {isIPTarget(service.host) && (
+            <div className="text-[11px] text-amber-500 mt-0.5">⚠ Static IP target</div>
+          )}
         </div>
       ),
     },

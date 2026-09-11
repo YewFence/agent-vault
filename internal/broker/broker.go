@@ -637,7 +637,10 @@ func matchHostPattern(pattern, host string) (tier int, ok bool) {
 	if h, _, err := net.SplitHostPort(pattern); err == nil {
 		pattern = h
 	}
-	if pattern == host {
+	if patternIP, hostIP := net.ParseIP(pattern), net.ParseIP(host); patternIP != nil || hostIP != nil {
+		return HostTierExact, patternIP != nil && hostIP != nil && patternIP.Equal(hostIP)
+	}
+	if strings.EqualFold(pattern, host) {
 		return HostTierExact, true
 	}
 	if strings.HasPrefix(pattern, "*.") {
@@ -908,8 +911,8 @@ var internalHosts = []string{
 	"instance-data",
 }
 
-// ValidateHost accepts bare hostnames and one-level wildcards
-// (`*.github.com`). Rejects IPs, internal names (see internalHosts),
+// ValidateHost accepts bare hostnames, exact IPv4/IPv6 addresses, and
+// one-level wildcards (`*.github.com`). Rejects internal names (see internalHosts),
 // bare wildcards, and characters that would break URL parsing.
 func ValidateHost(host string) error {
 	h := strings.TrimSpace(host)
@@ -924,7 +927,7 @@ func ValidateHost(host string) error {
 	}
 
 	if net.ParseIP(h) != nil {
-		return fmt.Errorf("host %q must be a hostname, not an IP address", host)
+		return nil
 	}
 
 	if strings.HasPrefix(h, "*") {
@@ -985,6 +988,24 @@ func SplitInlineHost(host, path string) (string, string, *int) {
 // numeric). It does NOT use net.SplitHostPort so that wildcard hosts like
 // *.github.com:8080 work without bracket syntax.
 func splitHostPort(host string) (string, *int) {
+	// Bracketed IPv6 is the unambiguous URL form: [fd00::12]:8080.
+	if strings.HasPrefix(host, "[") {
+		if h, port, err := net.SplitHostPort(host); err == nil {
+			p, err := strconv.Atoi(port)
+			if err == nil {
+				return h, &p
+			}
+		}
+		if strings.HasSuffix(host, "]") {
+			return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), nil
+		}
+		return host, nil
+	}
+	// A bare IPv6 literal has multiple colons and cannot carry an inline
+	// port without brackets. Keep it intact and let ValidateHost decide.
+	if strings.Count(host, ":") > 1 {
+		return host, nil
+	}
 	idx := strings.LastIndexByte(host, ':')
 	if idx < 0 {
 		return host, nil
@@ -1002,6 +1023,9 @@ func splitHostPort(host string) (string, *int) {
 // conflicts with a port embedded in Host (e.g. host: "foo.com:3000" + port: 4000).
 func NormalizePort(svc *Service) error {
 	host, path, inlinePort := SplitInlineHost(svc.Host, svc.Path)
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
 	svc.Host = host
 	svc.Path = path
 

@@ -139,6 +139,25 @@ func TestMatchServicePortStripped(t *testing.T) {
 	}
 }
 
+func TestMatchServiceExactIPNormalizesIPv6(t *testing.T) {
+	services := []Service{{Name: "internal", Host: "fd00::12", Auth: Auth{Type: "passthrough"}}}
+	got, _ := MatchService("FD00:0:0:0:0:0:0:12", 443, "/", services)
+	if got == nil {
+		t.Fatal("expected normalized IPv6 address to match")
+	}
+}
+
+func TestNormalizePortBracketedIPv6(t *testing.T) {
+	p := 8080
+	svc := Service{Host: "[fd00::12]:8080", Port: &p}
+	if err := NormalizePort(&svc); err != nil {
+		t.Fatal(err)
+	}
+	if svc.Host != "fd00::12" || svc.Port == nil || *svc.Port != 8080 {
+		t.Fatalf("unexpected normalized service: %+v", svc)
+	}
+}
+
 // --- ValidateSlug tests ---
 
 func TestValidateSlugHappyPath(t *testing.T) {
@@ -693,10 +712,10 @@ func TestValidateHostHappyPath(t *testing.T) {
 	}
 }
 
-func TestValidateHostRejectsIP(t *testing.T) {
+func TestValidateHostAcceptsIP(t *testing.T) {
 	for _, h := range []string{"127.0.0.1", "10.0.0.1", "::1", "192.168.1.1"} {
-		if err := ValidateHost(h); err == nil {
-			t.Errorf("ValidateHost(%q) expected error", h)
+		if err := ValidateHost(h); err != nil {
+			t.Errorf("ValidateHost(%q) unexpected error: %v", h, err)
 		}
 	}
 }
@@ -730,13 +749,10 @@ func TestValidateHostRejectsBareWildcardAndShallow(t *testing.T) {
 }
 
 // TestValidateConfigEnforcesHostSafety pins that the direct upsert path
-// (broker.Validate) now rejects IP addresses and internal hosts — the
-// proposal flow has always done this, but admins doing a direct POST
-// to /v1/vaults/{name}/services used to slip through.
+// (broker.Validate) rejects internal hosts while accepting exact IP targets.
 func TestValidateConfigEnforcesHostSafety(t *testing.T) {
 	t.Setenv("AGENT_VAULT_DEV_MODE", "")
 	cases := []struct{ name, host string }{
-		{"ip", "10.0.0.5"},
 		{"localhost", "localhost"},
 		{"metadata", "metadata.google.internal"},
 	}

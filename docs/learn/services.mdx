@@ -267,7 +267,7 @@ Substitutions and auth are independent. A service can use either, both, or neith
 
 ## Matching rules
 
-The `host` pattern is the single matcher knob. It can carry just a hostname (`api.stripe.com`), a wildcard host (`*.github.com`), an inline path glob (`slack.com/api/*`), or a port-scoped form (`internal.corp.com:3000` or `internal.corp.com:3000/api/*`).
+The `host` pattern is the single matcher knob. It can carry just a hostname (`api.stripe.com`), an exact IPv4 or IPv6 address (`10.0.0.12` or `[fd00::12]:8080`), a wildcard host (`*.github.com`), an inline path glob (`slack.com/api/*`), or a port-scoped form (`internal.corp.com:3000` or `internal.corp.com:3000/api/*`). IP targets are exact matches and never use wildcards or reverse DNS.
 
 **Host portion** supports two modes:
 
@@ -275,6 +275,8 @@ The `host` pattern is the single matcher knob. It can carry just a hostname (`ap
 - **Wildcard**: `*.github.com` matches `api.github.com`, `uploads.github.com`, etc. The `*` replaces exactly one subdomain segment.
 
 **Port** (optional, between host and path as `host:port`): when present, the service matches only traffic to that port. When omitted, the service matches any port. Use this when multiple services run on the same host at different ports (e.g. `internal.corp.com:3000` and `internal.corp.com:4000`).
+
+IPv6 addresses with an inline port must use brackets, such as `[fd00::12]:8080`; a bare IPv6 address has no inline port. IP targets are still subject to Agent Vault's network guard: loopback, link-local, and cloud metadata addresses remain blocked, while private ranges require the same private-range or network-allowlist policy as other outbound requests. Because an IP is a static identity, changing its assignment can cause credentials to reach a different service; review IP-based services when network assignments change.
 
 **Path portion** (optional, follows the host or host:port with a `/`) is a URL glob. A bare host with no path matches any path; a non-empty path must start with `/` and may use `*` as a greedy glob (cross-`/`). `**`, `?`, regex, and a bare `*` are rejected.
 

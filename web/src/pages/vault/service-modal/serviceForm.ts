@@ -31,6 +31,8 @@ const ENV_VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEADER_NAME_RE = /^[a-zA-Z0-9-]+$/;
 // broker hostLabelPattern.
 const HOST_LABEL_RE = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
+const IPV4_RE = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+const IPV6_RE = /^[0-9a-f:]+$/i;
 
 /* -- Errors -- */
 
@@ -83,17 +85,35 @@ export function validateHostPattern(raw: string): string | null {
   }
 
   let host = hostPort;
-  const colon = hostPort.lastIndexOf(":");
-  if (colon !== -1) {
+  // IPv6 may be written as [addr]:port in the inline form. A bare IPv6
+  // literal has no unambiguous inline port and is kept intact.
+  if (hostPort.startsWith("[")) {
+    const close = hostPort.indexOf("]");
+    if (close === -1) return "Invalid bracketed IPv6 address";
+    host = hostPort.slice(1, close);
+    const rest = hostPort.slice(close + 1);
+    if (rest && !/^:\d+$/.test(rest)) return "Invalid IPv6 host/port";
+    if (rest) {
+      const port = Number(rest.slice(1));
+      if (port < 1 || port > 65535) return `"${hostPort}" has an invalid port`;
+    }
+  } else if (IPV6_RE.test(hostPort) && (hostPort.match(/:/g) ?? []).length > 1) {
+    host = hostPort;
+  } else {
+    const colon = hostPort.lastIndexOf(":");
+    if (colon !== -1) {
     const portStr = hostPort.slice(colon + 1);
     host = hostPort.slice(0, colon);
     if (!/^\d+$/.test(portStr)) return `"${hostPort}" has an invalid port`;
     const port = Number(portStr);
     if (port < 1 || port > 65535) return `"${hostPort}" has an invalid port`;
+    }
   }
 
   if (!host) return "Host is required";
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return "Must be a hostname, not an IP address";
+  const validIPv4 = IPV4_RE.test(host) && host.split(".").every((part) => Number(part) <= 255);
+  const validIPv6 = IPV6_RE.test(host) && host.includes(":") && host.split(":").length >= 3;
+  if (validIPv4 || validIPv6) return null;
   if (host.startsWith("*")) {
     if (host === "*") return "Bare wildcard is not allowed";
     if (!host.startsWith("*.")) return "Wildcard must be in the form *.example.com";
