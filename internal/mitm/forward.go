@@ -98,6 +98,14 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	// TierAuth budget and key shape with CONNECT. Loopback is exempt.
 	if p.rateLimit != nil && !isLoopbackPeer(r) {
 		if d := p.rateLimit.Check(ratelimit.TierAuth, mitmIPKey(r)); !d.Allow {
+			p.logger.Warn("mitm rate limit denied",
+				"tier", ratelimit.TierAuth.String(),
+				"reason", d.Reason,
+				"remote_addr", r.RemoteAddr,
+				"method", r.Method,
+				"target", r.URL.Host,
+				"retry_after_sec", int(d.RetryAfter.Seconds()),
+			)
 			writeMITMRateLimitDenial(w, d, "Too many proxy requests")
 			return
 		}
