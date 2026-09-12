@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
@@ -34,6 +35,22 @@ type Metrics struct {
 	denialsCounter  metric.Int64Counter
 	duration        metric.Float64Histogram
 	inFlight        metric.Int64UpDownCounter
+	exporterFailure metric.Int64Counter
+}
+
+type countingExporter struct {
+	sdkmetric.Exporter
+	onFailure func()
+}
+
+func (e *countingExporter) Export(ctx context.Context, data *metricdata.ResourceMetrics) error {
+	if err := e.Exporter.Export(ctx, data); err != nil {
+		if e.onFailure != nil {
+			e.onFailure()
+		}
+		return err
+	}
+	return nil
 }
 
 // NewFromProvider builds the instruments on an already configured provider.
@@ -63,7 +80,11 @@ func NewFromProvider(provider *sdkmetric.MeterProvider) (*Metrics, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Metrics{provider: provider, requestsCounter: rq, errorsCounter: er, denialsCounter: dn, duration: dur, inFlight: flight}, nil
+	failures, err := m.Int64Counter("agent_vault.exporter.failures")
+	if err != nil {
+		return nil, err
+	}
+	return &Metrics{provider: provider, requestsCounter: rq, errorsCounter: er, denialsCounter: dn, duration: dur, inFlight: flight, exporterFailure: failures}, nil
 }
 
 // NewFromEnv creates an OTLP metrics provider. No endpoint means disabled.
@@ -74,18 +95,21 @@ func NewFromEnv(version string) (*Metrics, error) {
 	ctx := context.Background()
 	protocol := strings.ToLower(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))
 	var reader sdkmetric.Reader
+	var counted *countingExporter
 	var err error
 	if protocol == "grpc" || protocol == "" {
 		var exp sdkmetric.Exporter
 		exp, err = otlpmetricgrpc.New(ctx)
 		if err == nil {
-			reader = sdkmetric.NewPeriodicReader(exp)
+			counted = &countingExporter{Exporter: exp}
+			reader = sdkmetric.NewPeriodicReader(counted)
 		}
 	} else if protocol == "http/protobuf" || protocol == "http" {
 		var exp sdkmetric.Exporter
 		exp, err = otlpmetrichttp.New(ctx)
 		if err == nil {
-			reader = sdkmetric.NewPeriodicReader(exp)
+			counted = &countingExporter{Exporter: exp}
+			reader = sdkmetric.NewPeriodicReader(counted)
 		}
 	} else {
 		return nil, errors.New("unsupported OTEL_EXPORTER_OTLP_PROTOCOL (use grpc or http/protobuf)")
@@ -101,7 +125,15 @@ func NewFromEnv(version string) (*Metrics, error) {
 		return nil, err
 	}
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithResource(res))
-	return NewFromProvider(provider)
+	m, err := NewFromProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	// The reader owns the wrapper; install the callback after instruments exist.
+	if counted != nil {
+		counted.onFailure = func() { m.exporterFailure.Add(context.Background(), 1) }
+	}
+	return m, nil
 }
 
 func anonymousInstanceID() string { return telemetry.MachineID() }
