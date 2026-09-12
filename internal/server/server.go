@@ -22,6 +22,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/infisical"
+	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/notify"
@@ -88,6 +89,7 @@ type Server struct {
 	infisicalDynamic *infisical.DynamicResolver
 	oauthRefresher   *oauth.Refresher
 	telemetry        *telemetry.Telemetry
+	metrics          *metrics.Metrics
 }
 
 // lockVaultServices acquires the per-vault mutation lock via the store's
@@ -130,6 +132,12 @@ func (s *Server) LogSink() requestlog.Sink { return s.logSink }
 // AttachTelemetry sets the PostHog telemetry client. When nil (the
 // default), captureEvent is a no-op.
 func (s *Server) AttachTelemetry(t *telemetry.Telemetry) { s.telemetry = t }
+
+// AttachMetrics sets the optional proxy metrics recorder.
+func (s *Server) AttachMetrics(m *metrics.Metrics) { s.metrics = m }
+
+// Metrics returns the optional proxy metrics recorder.
+func (s *Server) Metrics() *metrics.Metrics { return s.metrics }
 
 // captureEvent sends a telemetry event if telemetry is configured.
 // actor may be nil for pre-auth endpoints (login, register); callers
@@ -1096,6 +1104,11 @@ func (s *Server) Start() error {
 	}
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server shutdown: %w", err)
+	}
+	if s.metrics != nil {
+		if err := s.metrics.Shutdown(ctx); err != nil {
+			s.logger.Warn("metrics shutdown failed", "err", err)
+		}
 	}
 
 	// Stop background workers (syncer + touch-cache pruner) and wait for the

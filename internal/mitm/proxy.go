@@ -37,6 +37,7 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/ca"
+	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
@@ -55,7 +56,8 @@ type Proxy struct {
 	logger           *slog.Logger
 	rateLimit        *ratelimit.Registry // shared with the HTTP server; nil = no-op
 	logSink          requestlog.Sink     // never nil (Nop default); shared with the HTTP server
-	maxResponseBytes int64               // 0 = unlimited
+	metrics          *metrics.Metrics
+	maxResponseBytes int64 // 0 = unlimited
 	maxRequestBytes  int64
 }
 
@@ -73,8 +75,9 @@ type Options struct {
 	Logger           *slog.Logger
 	RateLimit        *ratelimit.Registry
 	LogSink          requestlog.Sink // nil → Nop
-	MaxResponseBytes int64           // 0 = unlimited (default); >0 = cap in bytes
-	MaxRequestBytes  int64           // 0 → DefaultMaxRequestBytes (1 GiB)
+	Metrics          *metrics.Metrics
+	MaxResponseBytes int64 // 0 = unlimited (default); >0 = cap in bytes
+	MaxRequestBytes  int64 // 0 → DefaultMaxRequestBytes (1 GiB)
 }
 
 // New builds a Proxy bound to addr. The returned Proxy does not begin
@@ -109,6 +112,7 @@ func New(addr string, opts Options) *Proxy {
 		logger:           opts.Logger,
 		rateLimit:        opts.RateLimit,
 		logSink:          sink,
+		metrics:          opts.Metrics,
 		maxResponseBytes: opts.MaxResponseBytes, // 0 = unlimited
 		maxRequestBytes:  maxReq,
 	}

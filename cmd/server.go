@@ -22,6 +22,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/datadir"
 	"github.com/Infisical/agent-vault/internal/infisical"
+	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/notify"
 	"github.com/Infisical/agent-vault/internal/pidfile"
@@ -180,6 +181,7 @@ var serverCmd = &cobra.Command{
 		notifier := notify.New(smtpCfg)
 		srv := server.New(addr, db, masterKey.Key(), notifier, initialized, baseURL, logger)
 		srv.AttachTelemetry(tel)
+		attachMetrics(srv, logger)
 		shutdownLogs := attachLogSink(srv, db, logger)
 		defer shutdownLogs()
 		if err := attachServerExtensions(srv, host, mitmPort, masterKey.Key(), db, logger, maxRespBytes, maxReqBytes); err != nil {
@@ -227,11 +229,21 @@ func attachMITMIfEnabled(srv *server.Server, host string, mitmPort int, masterKe
 			Logger:           srv.Logger(),
 			RateLimit:        srv.RateLimit(),
 			LogSink:          srv.LogSink(),
+			Metrics:          srv.Metrics(),
 			MaxResponseBytes: maxRespBytes,
 			MaxRequestBytes:  maxReqBytes,
 		},
 	))
 	return nil
+}
+
+func attachMetrics(srv *server.Server, logger *slog.Logger) {
+	m, err := metrics.NewFromEnv(version)
+	if err != nil {
+		logger.Warn("metrics disabled", "err", err)
+		return
+	}
+	srv.AttachMetrics(m)
 }
 
 // attachServerExtensions wires optional subsystems (MITM, Infisical) onto srv.
@@ -600,6 +612,7 @@ func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxR
 	notifier := notify.New(smtpCfg)
 	srv := server.New(addr, db, key, notifier, initialized, baseURL, logger)
 	srv.AttachTelemetry(tel)
+	attachMetrics(srv, logger)
 	shutdownLogs := attachLogSink(srv, db, logger)
 	defer shutdownLogs()
 	if err := attachServerExtensions(srv, host, mitmPort, key, db, logger, maxRespBytes, maxReqBytes); err != nil {

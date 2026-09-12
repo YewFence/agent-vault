@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
@@ -225,9 +226,20 @@ func (p *Proxy) forwardRequest(
 		AuthHeader: authHeader,
 	}
 	actorType, actorID := actorFromScope(scope)
+	if p.metrics != nil {
+		p.metrics.AddInFlight(r.Context(), 1, actorType)
+		defer p.metrics.AddInFlight(r.Context(), -1, actorType)
+	}
 	emit := func(status int, errCode string) {
 		event.Emit(p.logger, start, status, errCode)
 		p.logSink.Record(r.Context(), requestlog.FromEvent(event, scope.VaultID, actorType, actorID))
+		if p.metrics != nil {
+			p.metrics.Record(r.Context(), metrics.ProxyEvent{
+				Method: event.Method, Status: event.Status, ErrorCode: event.Err,
+				ActorType: actorType, MatchedService: event.MatchedService,
+				Latency: time.Duration(event.TotalMs) * time.Millisecond,
+			})
+		}
 	}
 
 	enf := p.rateLimit.EnforceProxy(r.Context(), scope.ActorID(), scope.VaultID)
