@@ -55,12 +55,14 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `AGENT_VAULT_LOGS_MAX_AGE_HOURS` | Retention ceiling for the per-vault request log. Default `168` (7 days). Rows older than this are trimmed by a background job every 15 minutes. Only non-secret metadata is stored. |
     | `AGENT_VAULT_LOGS_MAX_ROWS_PER_VAULT` | Per-vault row cap for the request log. Default `10000`. Whichever limit (age or rows) fills first wins. Set `0` to disable the cap. |
     | `AGENT_VAULT_LOGS_RETENTION_LOCK` | When `true`, owner-UI overrides for log retention are ignored and env values (or defaults) are pinned. |
-    | `OTEL_EXPORTER_OTLP_ENDPOINT` | Enables proxy Metrics export to an OTLP Collector. If unset, Metrics export is disabled. |
-    | `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP transport: `grpc` (default) or `http/protobuf`. Production endpoints should use TLS. |
+    | `OTEL_EXPORTER_OTLP_ENDPOINT` | Enables proxy metrics and per-request logs export to an OTLP Collector. If unset (and no per-signal endpoint is set), OpenTelemetry export is disabled. See [Observability](/self-hosting/observability). |
+    | `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP transport for all signals: `grpc` (default) or `http/protobuf`. Production endpoints should use TLS. |
     | `OTEL_EXPORTER_OTLP_HEADERS` | Authentication and other OTLP exporter headers. Treat this value as a secret. |
+    | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Per-signal override sending only metrics elsewhere; enables metrics even without the generic endpoint. `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` and `OTEL_EXPORTER_OTLP_METRICS_HEADERS` follow the same pattern. |
+    | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Per-signal override sending only request logs elsewhere; enables logs even without the generic endpoint. `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` and `OTEL_EXPORTER_OTLP_LOGS_HEADERS` follow the same pattern. |
     | `OTEL_SERVICE_NAME` | Overrides the OpenTelemetry service name (default `agent-vault`). |
     | `OTEL_RESOURCE_ATTRIBUTES` | Additional OpenTelemetry resource attributes. |
-    | `OTEL_SDK_DISABLED` | Set to `true` or `1` to disable OpenTelemetry Metrics even when an endpoint is configured. |
+    | `OTEL_SDK_DISABLED` | Set to `true` or `1` to disable OpenTelemetry export (metrics and logs) even when an endpoint is configured. |
     | `INFISICAL_URL` | Base URL of an Infisical instance. When set, the server constructs a machine-identity client from one of the auth-method groups below and enables `--credential-store=infisical` on `vault create`. See [Credential stores](/learn/credential-stores) for the conceptual overview and [Environment variables: Infisical credential store](/self-hosting/environment-variables#infisical-credential-store) for the priority order when multiple groups are configured. |
     | `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` | Universal Auth client ID. Set together with `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET`. |
     | `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` | Universal Auth client secret. Set together with `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID`. |

@@ -1,0 +1,104 @@
+---
+title: "Observability"
+description: "Export Agent Vault proxy metrics and per-request logs to any OTLP-compatible backend."
+---
+
+Agent Vault has two observability surfaces. Out of the box, every deployment keeps a per-vault request log (visible in the dashboard, trimmed by [retention settings](/self-hosting/environment-variables)) and writes operational logs to stderr. On top of that, Agent Vault can export **proxy metrics** and **per-request logs** to an OTLP Collector using the standard `OTEL_*` environment variables.
+
+The built-in surfaces are not going away, but for anything beyond casual inspection — long retention, cross-instance aggregation, alerting, dashboards — we recommend wiring up OTLP for more complete observability.
+
+## Quickstart
+
+Point Agent Vault at any OTLP Collector and both signals start flowing:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
+OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer <token>" # if your collector requires it
+```
+
+A minimal collector for a first look:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+exporters:
+  debug:
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      exporters: [debug]
+```
+
+From there, swap the `debug` exporter for your real backend (Prometheus, Grafana Mimir, Loki, Tempo, Honeycomb, Datadog, …). Transport defaults to gRPC; set `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` for HTTP. Production endpoints should use TLS. To route one signal elsewhere — say, metrics to Mimir but logs to Loki through different gateways — use the per-signal `OTEL_EXPORTER_OTLP_METRICS_*` / `OTEL_EXPORTER_OTLP_LOGS_*` overrides documented in [Environment variables](/self-hosting/environment-variables).
+
+## Metrics
+
+All instruments live under the `agent_vault.*` namespace:
+
+| Instrument | Type | Description |
+|------------|------|-------------|
+| `agent_vault.proxy.requests` | counter | Proxied requests |
+| `agent_vault.proxy.errors` | counter | Proxy or upstream failures (excludes denials) |
+| `agent_vault.proxy.denials` | counter | Requests Agent Vault refused (auth, SSRF guard, rate limit, policy, no match, disabled service) |
+| `agent_vault.proxy.duration` | histogram (seconds) | End-to-end request latency |
+| `agent_vault.proxy.in_flight` | up/down counter | Requests currently in flight |
+| `agent_vault.exporter.failures` | counter | Failed OTLP exports, tagged by `signal` (`metrics`, `logs`) |
+
+Request instruments carry low-cardinality attributes: `http.request.method`, `agent_vault.status_class` (`2xx`, `4xx`, …), `agent_vault.error_code`, `agent_vault.actor_type`, and `agent_vault.matched_service` (`unmatched` when nothing matched).
+
+## Request logs
+
+Every proxied request also produces one OTel log record, marked with event name `agent_vault.proxy.request`. The body is a one-line summary:
+
+```
+POST api.github.com/repos/o/r/issues → 201 (142ms)
+```
+
+Severity follows the outcome:
+
+| Outcome | Severity |
+|---------|----------|
+| Successful forward (any upstream status) | `INFO` |
+| Denial (auth, SSRF guard, rate limit, policy, no match, disabled service) | `WARN` |
+| Proxy or upstream failure | `ERROR` |
+
+Unlike metrics, log records carry the full request context — the same secret-free metadata the dashboard request log persists (no bodies, no header values, no query strings):
+
+| Attribute | Description |
+|-----------|-------------|
+| `http.request.method` | HTTP method from the agent request |
+| `server.address` | Target host |
+| `url.path` | Request path (no query string) |
+| `http.response.status_code` | Upstream status; `0` if never dispatched |
+| `agent_vault.ingress` | Entrypoint that handled the request (`mitm`) |
+| `agent_vault.vault_id` | Vault the request flowed through |
+| `agent_vault.actor_type` | `agent` or `user` |
+| `agent_vault.actor_id` | ID of the acting agent or user |
+| `agent_vault.matched_service` | Matched service slug, or `unmatched` |
+| `agent_vault.matched_host` | Host pattern of the matched service |
+| `agent_vault.matched_path` | Path pattern of the matched service, when not catch-all |
+| `agent_vault.matched_port` | Port of the matched service, when pinned |
+| `agent_vault.credential_keys` | Names (never values) of substituted credential keys |
+| `agent_vault.auth_scheme` | Best-effort detected auth scheme (`bearer`, `basic`, `api-key`) |
+| `agent_vault.auth_header` | Name of the header carrying auth, e.g. `Authorization` |
+| `agent_vault.error_code` | Machine-readable failure code, present on denials and errors |
+| `agent_vault.latency_ms` | End-to-end latency in milliseconds |
+
+One record per request can be chatty on busy instances. If you only want failures, filter in the collector rather than at the source — for example with the `filter` processor dropping records whose severity is below `WARN`.
+
+## Relationship to the built-in request log
+
+Nothing about the built-in pipeline changes: the dashboard request log, its retention knobs, and the stderr operational logs keep working whether or not OTLP is configured. OTLP export runs as an additional sink alongside them. The built-in log is handy for a single instance; OTLP is what you want for retention beyond the built-in caps, aggregation across instances, and alerting on denials or error codes.
+
+## Watching the exporter itself
+
+If the collector is unreachable, exports fail silently into two visible places: the `agent_vault.exporter.failures` counter (tagged with the failing `signal`), and a throttled warning in the server's stderr logs (at most one line per minute per signal). Alert on the counter growing and you will notice a dead collector before your operators do.
+
+Set `OTEL_SDK_DISABLED=true` to turn all OpenTelemetry export off without touching endpoint configuration.
