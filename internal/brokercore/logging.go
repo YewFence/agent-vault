@@ -2,6 +2,7 @@ package brokercore
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -53,6 +54,20 @@ func (e *ProxyEvent) Emit(logger *slog.Logger, start time.Time, status int, errC
 	e.Err = errCode
 	e.TotalMs = time.Since(start).Milliseconds()
 	LogProxyEvent(logger, *e)
+}
+
+// IsDenial classifies a ProxyEvent error code as a request Agent Vault
+// refused (auth, SSRF guard, rate limit, policy, no service match, or a
+// disabled service) rather than a proxy or upstream failure. Metrics and
+// logs share this classification so denials slice identically across
+// signals.
+func IsDenial(code string) bool {
+	return strings.Contains(code, "auth") ||
+		strings.Contains(code, "ssrf") ||
+		strings.Contains(code, "rate") ||
+		strings.Contains(code, "policy") ||
+		code == "no_match" ||
+		code == "service_disabled"
 }
 
 // LogProxyEvent emits e at Debug level on logger. Handler-level filtering

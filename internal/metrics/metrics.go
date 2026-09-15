@@ -3,9 +3,6 @@ package metrics
 
 import (
 	"context"
-	"errors"
-	"os"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -14,10 +11,9 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
-	"github.com/Infisical/agent-vault/internal/telemetry"
+	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/otlp"
 )
 
 const meterName = "agent_vault.proxy"
@@ -87,40 +83,30 @@ func NewFromProvider(provider *sdkmetric.MeterProvider) (*Metrics, error) {
 	return &Metrics{provider: provider, requestsCounter: rq, errorsCounter: er, denialsCounter: dn, duration: dur, inFlight: flight, exporterFailure: failures}, nil
 }
 
-// NewFromEnv creates an OTLP metrics provider. No endpoint means disabled.
+// NewFromEnv creates an OTLP metrics provider from the shared OTEL_*
+// configuration. No endpoint (generic or metrics-specific) means disabled.
 func NewFromEnv(version string) (*Metrics, error) {
-	if os.Getenv("OTEL_SDK_DISABLED") == "true" || os.Getenv("OTEL_SDK_DISABLED") == "1" || os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
+	if !otlp.Enabled("metrics") {
 		return nil, nil
 	}
 	ctx := context.Background()
-	protocol := strings.ToLower(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))
-	var reader sdkmetric.Reader
-	var counted *countingExporter
-	var err error
-	if protocol == "grpc" || protocol == "" {
-		var exp sdkmetric.Exporter
+	protocol, err := otlp.Protocol("metrics")
+	if err != nil {
+		return nil, err
+	}
+	var exp sdkmetric.Exporter
+	switch protocol {
+	case otlp.ProtocolGRPC:
 		exp, err = otlpmetricgrpc.New(ctx)
-		if err == nil {
-			counted = &countingExporter{Exporter: exp}
-			reader = sdkmetric.NewPeriodicReader(counted)
-		}
-	} else if protocol == "http/protobuf" || protocol == "http" {
-		var exp sdkmetric.Exporter
+	case otlp.ProtocolHTTPProtobuf:
 		exp, err = otlpmetrichttp.New(ctx)
-		if err == nil {
-			counted = &countingExporter{Exporter: exp}
-			reader = sdkmetric.NewPeriodicReader(counted)
-		}
-	} else {
-		return nil, errors.New("unsupported OTEL_EXPORTER_OTLP_PROTOCOL (use grpc or http/protobuf)")
 	}
 	if err != nil {
 		return nil, err
 	}
-	res, err := resource.New(ctx,
-		resource.WithAttributes(semconv.ServiceName("agent-vault"), semconv.ServiceVersion(version), attribute.String("service.instance.id", anonymousInstanceID())),
-		resource.WithFromEnv(),
-	)
+	counted := &countingExporter{Exporter: exp}
+	reader := sdkmetric.NewPeriodicReader(counted)
+	res, err := otlp.NewResource(ctx, version)
 	if err != nil {
 		return nil, err
 	}
@@ -130,15 +116,12 @@ func NewFromEnv(version string) (*Metrics, error) {
 		return nil, err
 	}
 	// The reader owns the wrapper; install the callback after instruments exist.
-	if counted != nil {
-		counted.onFailure = func() { m.exporterFailure.Add(context.Background(), 1) }
-	}
+	counted.onFailure = func() { m.RecordExporterFailure(context.Background(), "metrics") }
 	return m, nil
 }
 
-func anonymousInstanceID() string { return telemetry.MachineID() }
 func attrs(e ProxyEvent) []attribute.KeyValue {
-	return []attribute.KeyValue{attribute.String("method", e.Method), attribute.String("status_class", statusClass(e.Status)), attribute.String("error_code", e.ErrorCode), attribute.String("actor_type", e.ActorType), attribute.String("matched_service", service(e.MatchedService))}
+	return []attribute.KeyValue{attribute.String("http.request.method", e.Method), attribute.String("agent_vault.status_class", statusClass(e.Status)), attribute.String("agent_vault.error_code", e.ErrorCode), attribute.String("agent_vault.actor_type", e.ActorType), attribute.String("agent_vault.matched_service", service(e.MatchedService))}
 }
 func statusClass(s int) string {
 	if s < 100 {
@@ -151,14 +134,6 @@ func service(s string) string {
 		return "unmatched"
 	}
 	return s
-}
-func denial(code string) bool {
-	return strings.Contains(code, "auth") ||
-		strings.Contains(code, "ssrf") ||
-		strings.Contains(code, "rate") ||
-		strings.Contains(code, "policy") ||
-		code == "no_match" ||
-		code == "service_disabled"
 }
 
 func addOptions(attrs []attribute.KeyValue) []metric.AddOption {
@@ -185,7 +160,7 @@ func (m *Metrics) Record(ctx context.Context, e ProxyEvent) {
 	m.requestsCounter.Add(ctx, 1, addOptions(a)...)
 	m.duration.Record(ctx, e.Latency.Seconds(), recordOptions(a)...)
 	if e.ErrorCode != "" {
-		if denial(e.ErrorCode) {
+		if brokercore.IsDenial(e.ErrorCode) {
 			m.denialsCounter.Add(ctx, 1, addOptions(a)...)
 		} else {
 			m.errorsCounter.Add(ctx, 1, addOptions(a)...)
@@ -194,9 +169,20 @@ func (m *Metrics) Record(ctx context.Context, e ProxyEvent) {
 }
 func (m *Metrics) AddInFlight(ctx context.Context, delta int64, actorType string) {
 	if m != nil {
-		m.inFlight.Add(ctx, delta, addOptions([]attribute.KeyValue{attribute.String("actor_type", actorType)})...)
+		m.inFlight.Add(ctx, delta, addOptions([]attribute.KeyValue{attribute.String("agent_vault.actor_type", actorType)})...)
 	}
 }
+
+// RecordExporterFailure counts one failed OTLP export for the given
+// signal ("metrics", "logs"). Other signal packages report through this
+// counter so exporter health stays a single time series sliced by signal.
+func (m *Metrics) RecordExporterFailure(ctx context.Context, signal string) {
+	if m == nil {
+		return
+	}
+	m.exporterFailure.Add(ctx, 1, addOptions([]attribute.KeyValue{attribute.String("signal", signal)})...)
+}
+
 func (m *Metrics) Shutdown(ctx context.Context) error {
 	if m == nil || m.provider == nil {
 		return nil

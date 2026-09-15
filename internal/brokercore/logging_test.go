@@ -219,3 +219,16 @@ func TestLogProxyEvent_NilLoggerSafe(t *testing.T) {
 	}()
 	LogProxyEvent(nil, ProxyEvent{Ingress: "explicit"})
 }
+
+func TestIsDenial(t *testing.T) {
+	for _, code := range []string{"auth_failed", "ssrf_blocked", "rate_limit_scope", "no_match", "service_disabled"} {
+		if !IsDenial(code) {
+			t.Errorf("IsDenial(%q) = false", code)
+		}
+	}
+	for _, code := range []string{"upstream_error", "credential_not_found", "internal", "substitution_error"} {
+		if IsDenial(code) {
+			t.Errorf("IsDenial(%q) = true", code)
+		}
+	}
+}

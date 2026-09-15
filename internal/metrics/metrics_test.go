@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -51,24 +52,57 @@ func TestRecordAndInFlight(t *testing.T) {
 			if sum, ok := item.Data.(metricdata.Sum[int64]); !ok || len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 1 {
 				t.Fatalf("errors metric = %#v, want one sample", item.Data)
 			}
+			attrs := attrMap(item.Data.(metricdata.Sum[int64]).DataPoints[0].Attributes)
+			want := map[string]string{
+				"http.request.method":        "GET",
+				"agent_vault.status_class":   "5xx",
+				"agent_vault.error_code":     "upstream_error",
+				"agent_vault.actor_type":     "agent",
+				"agent_vault.matched_service": "github",
+			}
+			for k, v := range want {
+				if attrs[k] != v {
+					t.Errorf("attribute %q = %q, want %q", k, attrs[k], v)
+				}
+			}
 		}
 	}
 }
 
-func TestDenialClassification(t *testing.T) {
-	for _, code := range []string{"auth_failed", "ssrf_blocked", "rate_limit_scope", "no_match", "service_disabled"} {
-		if !denial(code) {
-			t.Errorf("denial(%q) = false", code)
-		}
+func attrMap(set attribute.Set) map[string]string {
+	out := make(map[string]string, set.Len())
+	for _, kv := range set.ToSlice() {
+		out[string(kv.Key)] = kv.Value.String()
 	}
-	for _, code := range []string{"upstream_error", "credential_not_found", "internal", "substitution_error"} {
-		if denial(code) {
-			t.Errorf("denial(%q) = true", code)
-		}
+	return out
+}
+
+func TestRecordExporterFailure(t *testing.T) {
+	m, reader := testMetrics(t)
+	ctx := context.Background()
+	m.RecordExporterFailure(ctx, "logs")
+
+	var data metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &data); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(data.ScopeMetrics) != 1 || len(data.ScopeMetrics[0].Metrics) != 1 {
+		t.Fatalf("populated metrics = %#v, want exactly exporter.failures", data.ScopeMetrics)
+	}
+	item := data.ScopeMetrics[0].Metrics[0]
+	if item.Name != "agent_vault.exporter.failures" {
+		t.Fatalf("metric = %q, want agent_vault.exporter.failures", item.Name)
+	}
+	sum, ok := item.Data.(metricdata.Sum[int64])
+	if !ok || len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 1 {
+		t.Fatalf("exporter.failures = %#v, want one sample of 1", item.Data)
+	}
+	if got := attrMap(sum.DataPoints[0].Attributes)["signal"]; got != "logs" {
+		t.Fatalf("signal attribute = %q, want logs", got)
 	}
 }
 
-type failingExporter struct{ err error }
+type failingExporter struct{}
 
 func (failingExporter) Temporality(metric.InstrumentKind) metricdata.Temporality {
 	return metricdata.CumulativeTemporality
