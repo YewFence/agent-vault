@@ -12,11 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
+	"github.com/Infisical/agent-vault/internal/traces"
 )
 
 type flushingWriter struct {
@@ -216,6 +219,17 @@ func (p *Proxy) forwardRequest(
 	scope *brokercore.ProxyScope,
 ) {
 	start := time.Now()
+	ctx := p.traces.Extract(r.Context(), r.Header)
+	targetAttrs := traces.TargetAttrs(r.Method, host, r.URL.Path, port)
+	ctx, requestSpan := p.traces.Start(ctx, "agent_vault.proxy.request", trace.SpanKindServer, targetAttrs...)
+	r = r.WithContext(ctx)
+	// Covers unexpected exits/panics; the normal terminal emit ends it first.
+	defer requestSpan.End("internal")
+	var rewriteSpan, upstreamSpan *traces.Span
+	defer func() {
+		rewriteSpan.End("internal")
+		upstreamSpan.End("internal")
+	}()
 	authScheme, authHeader := detectAuthFromHeaders(r.Header)
 	event := brokercore.ProxyEvent{
 		Ingress:    brokercore.IngressMITM,
@@ -231,8 +245,11 @@ func (p *Proxy) forwardRequest(
 		defer p.metrics.AddInFlight(r.Context(), -1, actorType)
 	}
 	emit := func(status int, errCode string) {
+		rewriteSpan.End(errCode)
+		upstreamSpan.End(errCode)
 		event.Emit(p.logger, start, status, errCode)
-		p.logSink.Record(r.Context(), requestlog.FromEvent(event, scope.VaultID, actorType, actorID))
+		record := requestlog.FromEvent(event, scope.VaultID, actorType, actorID)
+		p.logSink.Record(r.Context(), record)
 		if p.metrics != nil {
 			p.metrics.Record(r.Context(), metrics.ProxyEvent{
 				Method: event.Method, Status: event.Status, ErrorCode: event.Err,
@@ -240,6 +257,7 @@ func (p *Proxy) forwardRequest(
 				Latency: time.Duration(event.TotalMs) * time.Millisecond,
 			})
 		}
+		requestSpan.EndRequest(record)
 	}
 
 	enf := p.rateLimit.EnforceProxy(r.Context(), scope.ActorID(), scope.VaultID)
@@ -270,7 +288,13 @@ func (p *Proxy) forwardRequest(
 		return
 	}
 
-	inject, err := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.URL.Path)
+	credentialCtx, credentialSpan := p.traces.Start(ctx, "agent_vault.proxy.credentials", trace.SpanKindInternal)
+	inject, err := p.creds.Inject(credentialCtx, scope.VaultID, host, port, r.URL.Path)
+	credentialCode := ""
+	if err != nil {
+		credentialCode = brokercore.ClassifyInjectError(err).LogCode
+	}
+	credentialSpan.End(credentialCode)
 	if inject != nil {
 		event.MatchedService = inject.MatchedName
 		event.MatchedHost = inject.MatchedHost
@@ -291,6 +315,7 @@ func (p *Proxy) forwardRequest(
 
 	var body io.ReadCloser
 	var contentLength int64
+	_, rewriteSpan = p.traces.Start(ctx, "agent_vault.proxy.rewrite", trace.SpanKindInternal)
 
 	hasSubs := brokercore.HasBodySubstitutions(inject.Substitutions)
 	canStream := !hasSubs && r.ContentLength >= 0
@@ -354,6 +379,7 @@ func (p *Proxy) forwardRequest(
 		}
 	}
 
+	rewriteSpan.End("")
 	if wsUpgrade {
 		wsSubs := filterWebSocketSubs(inject.Substitutions)
 		if len(wsSubs) > 0 {
@@ -363,7 +389,22 @@ func (p *Proxy) forwardRequest(
 		return
 	}
 
-	resp, err := p.upstream.RoundTrip(outReq)
+	// Each retry is a distinct client span and receives fresh propagation
+	// headers only after the final credential/header mutations for that attempt.
+	roundTrip := func(req *http.Request) (*http.Response, error) {
+		attemptCtx, span := p.traces.Start(ctx, "agent_vault.proxy.upstream", trace.SpanKindClient, targetAttrs...)
+		upstreamSpan = span
+		req = req.WithContext(attemptCtx)
+		p.traces.Inject(attemptCtx, host, req.Header)
+		resp, rtErr := p.upstream.RoundTrip(req)
+		if rtErr != nil {
+			span.End("upstream_error")
+		} else {
+			span.ResponseHeaders(resp.StatusCode)
+		}
+		return resp, rtErr
+	}
+	resp, err := roundTrip(outReq)
 	if err != nil {
 		p.logger.Debug("upstream request failed",
 			slog.String("vault_id", scope.VaultID),
@@ -381,22 +422,33 @@ func (p *Proxy) forwardRequest(
 	// (GET/HEAD) are retried — the request body is consumed and cannot be replayed.
 	if resp.StatusCode == http.StatusUnauthorized && inject != nil && !inject.Passthrough &&
 		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
-		_ = resp.Body.Close()
-		retryInject, retryErr := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.URL.Path)
+		retryCtx, retrySpan := p.traces.Start(ctx, "agent_vault.proxy.credentials", trace.SpanKindInternal)
+		retryInject, retryErr := p.creds.Inject(retryCtx, scope.VaultID, host, port, r.URL.Path)
+		retryCode := ""
+		if retryErr != nil {
+			retryCode = brokercore.ClassifyInjectError(retryErr).LogCode
+		}
+		retrySpan.End(retryCode)
 		if retryErr == nil && retryInject != nil && retryInject.Headers != nil {
+			_ = resp.Body.Close()
+			upstreamSpan.End("")
 			retryReq := outReq.Clone(outReq.Context())
 			for k, v := range retryInject.Headers {
 				retryReq.Header.Set(k, v)
 			}
 			retryReq.Body = http.NoBody
 			retryReq.ContentLength = 0
-			if retryResp, retryRTErr := p.upstream.RoundTrip(retryReq); retryRTErr == nil {
+			if retryResp, retryRTErr := roundTrip(retryReq); retryRTErr == nil {
 				resp = retryResp
 				p.logger.Debug("oauth 401 retry succeeded",
 					slog.String("host", host),
 					slog.String("path", r.URL.Path),
 					slog.Int("status", resp.StatusCode),
 				)
+			} else {
+				status, code := writeUpstreamFailure(w, retryRTErr)
+				emit(status, code)
+				return
 			}
 		}
 	}
@@ -436,7 +488,11 @@ func (p *Proxy) forwardRequest(
 	if f, ok := w.(http.Flusher); ok {
 		dst = &flushingWriter{w: w, f: f}
 	}
-	n, _ := io.Copy(dst, src)
+	n, copyErr := io.Copy(dst, src)
+	if copyErr != nil {
+		emit(resp.StatusCode, "response_transfer_error")
+		return
+	}
 
 	if p.maxResponseBytes > 0 && n == p.maxResponseBytes {
 		var probe [1]byte

@@ -41,6 +41,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
+	"github.com/Infisical/agent-vault/internal/traces"
 )
 
 // Proxy is a transparent MITM proxy. It is safe to start at most once;
@@ -57,6 +58,7 @@ type Proxy struct {
 	rateLimit        *ratelimit.Registry // shared with the HTTP server; nil = no-op
 	logSink          requestlog.Sink     // never nil (Nop default); shared with the HTTP server
 	metrics          *metrics.Metrics
+	traces           *traces.Traces
 	maxResponseBytes int64 // 0 = unlimited
 	maxRequestBytes  int64
 }
@@ -76,6 +78,7 @@ type Options struct {
 	RateLimit        *ratelimit.Registry
 	LogSink          requestlog.Sink // nil → Nop
 	Metrics          *metrics.Metrics
+	Traces           *traces.Traces
 	MaxResponseBytes int64 // 0 = unlimited (default); >0 = cap in bytes
 	MaxRequestBytes  int64 // 0 → DefaultMaxRequestBytes (1 GiB)
 }
@@ -113,6 +116,7 @@ func New(addr string, opts Options) *Proxy {
 		rateLimit:        opts.RateLimit,
 		logSink:          sink,
 		metrics:          opts.Metrics,
+		traces:           opts.Traces,
 		maxResponseBytes: opts.MaxResponseBytes, // 0 = unlimited
 		maxRequestBytes:  maxReq,
 	}

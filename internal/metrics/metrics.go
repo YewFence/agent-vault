@@ -174,7 +174,7 @@ func (m *Metrics) AddInFlight(ctx context.Context, delta int64, actorType string
 }
 
 // RecordExporterFailure counts one failed OTLP export for the given
-// signal ("metrics", "logs"). Other signal packages report through this
+// signal ("metrics", "logs", "traces"). Other signal packages report through this
 // counter so exporter health stays a single time series sliced by signal.
 func (m *Metrics) RecordExporterFailure(ctx context.Context, signal string) {
 	if m == nil {

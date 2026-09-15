@@ -1,15 +1,15 @@
 ---
 title: "Observability"
-description: "Export Agent Vault proxy metrics and per-request logs to any OTLP-compatible backend."
+description: "Export Agent Vault proxy metrics, request logs, and traces to any OTLP-compatible backend."
 ---
 
-Agent Vault has two observability surfaces. Out of the box, every deployment keeps a per-vault request log (visible in the dashboard, trimmed by [retention settings](/self-hosting/environment-variables)) and writes operational logs to stderr. On top of that, Agent Vault can export **proxy metrics** and **per-request logs** to an OTLP Collector using the standard `OTEL_*` environment variables.
+Agent Vault has two observability surfaces. Out of the box, every deployment keeps a per-vault request log (visible in the dashboard, trimmed by [retention settings](/self-hosting/environment-variables)) and writes operational logs to stderr. On top of that, Agent Vault can export **proxy metrics**, **per-request logs**, and **traces** to an OTLP Collector using the standard `OTEL_*` environment variables.
 
 The built-in surfaces are not going away, but for anything beyond casual inspection — long retention, cross-instance aggregation, alerting, dashboards — we recommend wiring up OTLP for more complete observability.
 
 ## Quickstart
 
-Point Agent Vault at any OTLP Collector and both signals start flowing:
+Point Agent Vault at an OTLP Collector with pipelines for all three signals:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
@@ -34,9 +34,14 @@ service:
     logs:
       receivers: [otlp]
       exporters: [debug]
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
 ```
 
-From there, swap the `debug` exporter for your real backend (Prometheus, Grafana Mimir, Loki, Tempo, Honeycomb, Datadog, …). Transport defaults to gRPC; set `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` for HTTP. Production endpoints should use TLS. To route one signal elsewhere — say, metrics to Mimir but logs to Loki through different gateways — use the per-signal `OTEL_EXPORTER_OTLP_METRICS_*` / `OTEL_EXPORTER_OTLP_LOGS_*` overrides documented in [Environment variables](/self-hosting/environment-variables).
+From there, swap the `debug` exporter for your real backend (Prometheus, Grafana Mimir, Loki, Tempo, Honeycomb, Datadog, …). Transport defaults to gRPC; set `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` for HTTP. Production endpoints should use TLS. To route signals separately, use the `OTEL_EXPORTER_OTLP_METRICS_*`, `OTEL_EXPORTER_OTLP_LOGS_*`, and `OTEL_EXPORTER_OTLP_TRACES_*` overrides documented in [Environment variables](/self-hosting/environment-variables).
+
+Upgrading a deployment with a generic OTLP endpoint also enables traces. Add a collector traces pipeline and review sampling and the outbound propagation rules below. By default, tracing removes W3C context headers from upstream requests, even though it still exports spans for those requests.
 
 ## Metrics
 
@@ -49,7 +54,7 @@ All instruments live under the `agent_vault.*` namespace:
 | `agent_vault.proxy.denials` | counter | Requests Agent Vault refused (auth, SSRF guard, rate limit, policy, no match, disabled service) |
 | `agent_vault.proxy.duration` | histogram (seconds) | End-to-end request latency |
 | `agent_vault.proxy.in_flight` | up/down counter | Requests currently in flight |
-| `agent_vault.exporter.failures` | counter | Failed OTLP exports, tagged by `signal` (`metrics`, `logs`) |
+| `agent_vault.exporter.failures` | counter | Failed OTLP exports, tagged by `signal` (`metrics`, `logs`, `traces`) |
 
 Request instruments carry low-cardinality attributes: `http.request.method`, `agent_vault.status_class` (`2xx`, `4xx`, …), `agent_vault.error_code`, `agent_vault.actor_type`, and `agent_vault.matched_service` (`unmatched` when nothing matched).
 
@@ -97,8 +102,58 @@ One record per request can be chatty on busy instances. If you only want failure
 
 Nothing about the built-in pipeline changes: the dashboard request log, its retention knobs, and the stderr operational logs keep working whether or not OTLP is configured. OTLP export runs as an additional sink alongside them. The built-in log is handy for a single instance; OTLP is what you want for retention beyond the built-in caps, aggregation across instances, and alerting on denials or error codes.
 
+## Traces
+
+Tracing covers the same authenticated proxy-request path as metrics and request logs: plain HTTP, HTTPS requests inside CONNECT tunnels, and WebSocket handshakes. Authentication failures before this path, CONNECT establishment, TLS interception handshakes, management APIs, and background tasks are not traced.
+
+| Span | Kind | Lifetime |
+|------|------|----------|
+| `agent_vault.proxy.request` | Server | Proxy processing through response-body transfer, or WebSocket handshake completion/failure |
+| `agent_vault.proxy.credentials` | Internal | Service matching and credential resolution, including a retry's credential resolution |
+| `agent_vault.proxy.rewrite` | Internal | Request materialization, header injection, and substitutions |
+| `agent_vault.proxy.upstream` | Client | One upstream attempt through response-body consumption/closure, or a WebSocket handshake |
+
+Each upstream span records an `http.response.headers` event on receipt of response headers. Streaming/SSE spans remain open through body transfer, so their duration includes downstream backpressure. WebSocket messages and connection lifetime are not traced. A retry creates a separate upstream span under the same request span.
+
+The request span is marked Error for proxy failures or final 5xx responses. Ordinary policy denials carry `agent_vault.error_code` without marking the proxy span Error. Upstream attempt spans are marked Error for network failures and 4xx/5xx responses; a 401 followed by a successful retry therefore leaves the first attempt marked Error and the overall request unmarked. Response-body read/write failures are recorded as `response_transfer_error`; already-sent HTTP status headers cannot be changed.
+
+Span metadata follows the request-log field scope, using the **incoming, pre-substitution** target path. `server.address` contains the hostname, with a separate `server.port`. No bodies, query strings, header values, rewritten credential-bearing URLs, or raw request errors are exported. Span names are fixed, not derived from paths. Caller-provided paths and identity metadata may still be sensitive; apply your collector's access and retention policy accordingly.
+
+### Outbound propagation
+
+Agent Vault accepts valid incoming W3C Trace Context as the request's parent, or creates a new trace if absent or invalid. It does not treat the supplied context as authorization. An operator controls propagation to upstreams through one startup-only environment variable:
+
+```bash
+AGENT_VAULT_TRACE_PROPAGATION_ALLOWLIST=api.internal.example.com,*.svc.example.com
+```
+
+- Matching is case-insensitive against the canonical routing hostname, not an arbitrary client `Host` header. Ports do not participate in matching.
+- `*.svc.example.com` matches one or more subdomain labels, not `svc.example.com` itself. It does not match lookalike suffixes. No URLs, paths, port selectors, CIDRs, regular expressions, or bare `*` are accepted. Trailing-dot patterns are rejected, and trailing-dot request hosts do not match.
+- Empty lists deny propagation to all targets. Any malformed entry rejects the entire list, logs a warning, and continues tracing with no allowed targets. Restart the server after changing this variable; there is no database or WebUI setting.
+- Allowed targets receive the outgoing attempt's `traceparent` and applicable `tracestate`. Caller baggage is retained under normal header-forwarding rules, without being extracted into Vault's context or populated with Vault attributes.
+- Other targets have `traceparent`, `tracestate`, and `baggage` removed after credential substitution and before dispatch, including on retries and WebSocket handshakes. Other propagation formats (such as B3) are not interpreted or filtered by this policy.
+
+**This allowlist controls request headers, not trace export.** A request to a non-allowed SaaS still produces Vault spans and upstream latency/status information in your collector, subject to sampling. Visibility into the SaaS's own internal spans requires its cooperation and access to its telemetry.
+
+The policy applies only when tracing initializes successfully. No endpoint, `OTEL_SDK_DISABLED=true`, or tracing initialization failure preserves the previous header-forwarding behavior. This is not a standalone egress security filter. Once initialized, collector outages do not disable the propagation policy, and unsampled requests still follow it.
+
+### Sampling and correlation
+
+The default `OTEL_TRACES_SAMPLER=parentbased_always_on` follows the parent's sampled flag and samples all new traces. To sample 10% of new traces while respecting the parent:
+
+```bash
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+Head sampling decides at request start and cannot guarantee retention of later failures. It does not suppress request logs or metrics. Incoming parent sampling is caller-controlled; operators who need independent local sampling can use `traceidratio` instead of the parent-based variant. Unknown sampler names fall back to `parentbased_always_on`; malformed or out-of-range ratios fall back to `1` while retaining the selected sampler's parent behavior. Both produce SDK diagnostics.
+
+OTLP request logs carry the active request's trace/span IDs, even when its trace was not sampled. Metrics receive the same context for trace-based exemplars when supported by the SDK configuration and backend. IDs do not guarantee a retained trace exists. The built-in database log and WebUI are unchanged; no trace-ID response header is added.
+
 ## Watching the exporter itself
 
 If the collector is unreachable, exports fail silently into two visible places: the `agent_vault.exporter.failures` counter (tagged with the failing `signal`), and a throttled warning in the server's stderr logs (at most one line per minute per signal). Alert on the counter growing and you will notice a dead collector before your operators do.
+
+Trace export is asynchronous with a bounded, non-blocking batch queue. Queue overflow can drop spans and is distinct from exporter-call failures counted above. Tracing initialization errors warn and disable tracing without blocking proxy startup. Shutdown attempts a bounded flush; in-flight hijacked CONNECT/WebSocket connections are not drained by the main HTTP server, so unfinished spans can be lost on process exit. The failure counter is available only when metrics are enabled; stderr warnings remain available independently.
 
 Set `OTEL_SDK_DISABLED=true` to turn all OpenTelemetry export off without touching endpoint configuration.

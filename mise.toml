@@ -50,6 +50,10 @@ go build -trimpath \
 description = "Run the Go test suite"
 run = "go test ./..."
 
+[tasks."test:observability"]
+description = "Test OTLP signals and proxy instrumentation with the race detector"
+run = "go test -race ./internal/otlp ./internal/traces ./internal/logs ./internal/metrics ./internal/mitm ./internal/server"
+
 [tasks."lint:go"]
 description = "Lint the Go code"
 run = "golangci-lint run ./..."

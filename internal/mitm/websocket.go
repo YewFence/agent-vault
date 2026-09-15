@@ -13,11 +13,15 @@ import (
 	"net"
 	"net/http"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/traces"
 )
 
 func isWebSocketUpgrade(r *http.Request) bool {
@@ -59,12 +63,25 @@ func (p *Proxy) forwardWebSocket(
 	wsSubs []brokercore.ResolvedSubstitution,
 	emit func(status int, errCode string),
 ) {
-	upstreamConn, upstreamReader, resp, err := p.dialWebSocketUpstream(r.Context(), outReq)
+	_, portString, _ := net.SplitHostPort(outReq.URL.Host)
+	port, _ := strconv.Atoi(portString)
+	ctx, span := p.traces.Start(r.Context(), "agent_vault.proxy.upstream", trace.SpanKindClient,
+		traces.TargetAttrs(r.Method, outReq.URL.Hostname(), r.URL.Path, port)...)
+	defer span.End("internal")
+	originalEmit := emit
+	emit = func(status int, code string) {
+		span.End(code)
+		originalEmit(status, code)
+	}
+	outReq = outReq.WithContext(ctx)
+	p.traces.Inject(ctx, outReq.URL.Hostname(), outReq.Header)
+	upstreamConn, upstreamReader, resp, err := p.dialWebSocketUpstream(ctx, outReq)
 	if err != nil {
 		status, code := writeUpstreamFailure(w, err)
 		emit(status, code)
 		return
 	}
+	span.ResponseHeaders(resp.StatusCode)
 	defer func() {
 		if resp == nil || resp.StatusCode != http.StatusSwitchingProtocols {
 			_ = upstreamConn.Close()
@@ -100,7 +117,11 @@ func (p *Proxy) forwardWebSocket(
 		if f, ok := w.(http.Flusher); ok {
 			dst = &flushingWriter{w: w, f: f}
 		}
-		n, _ := io.Copy(dst, src)
+		n, copyErr := io.Copy(dst, src)
+		if copyErr != nil {
+			emit(resp.StatusCode, "response_transfer_error")
+			return
+		}
 
 		if p.maxResponseBytes > 0 && n == p.maxResponseBytes {
 			var probe [1]byte

@@ -33,6 +33,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/requestlog"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/Infisical/agent-vault/internal/telemetry"
+	"github.com/Infisical/agent-vault/internal/traces"
 )
 
 //go:embed all:webdist
@@ -92,6 +93,7 @@ type Server struct {
 	telemetry        *telemetry.Telemetry
 	metrics          *metrics.Metrics
 	otlpLogs         *logs.Logs
+	traces           *traces.Traces
 }
 
 // lockVaultServices acquires the per-vault mutation lock via the store's
@@ -146,6 +148,11 @@ func (s *Server) AttachLogs(l *logs.Logs) { s.otlpLogs = l }
 
 // Logs returns the optional OTLP request-log exporter.
 func (s *Server) Logs() *logs.Logs { return s.otlpLogs }
+
+// AttachTraces sets the optional proxy tracer before the proxy starts.
+func (s *Server) AttachTraces(t *traces.Traces) { s.traces = t }
+
+func (s *Server) Traces() *traces.Traces { return s.traces }
 
 // captureEvent sends a telemetry event if telemetry is configured.
 // actor may be nil for pre-auth endpoints (login, register); callers
@@ -1010,6 +1017,7 @@ func (s *Server) requireInitialized(next http.HandlerFunc) http.HandlerFunc {
 // Start starts the server and blocks until shutdown.
 // It listens for SIGINT/SIGTERM to shut down gracefully.
 func (s *Server) Start() error {
+	defer s.shutdownObservability()
 	// Non-fatal: registry already holds env-based config from New().
 	if s.initialized {
 		if _, err := s.applyRateLimitSettingToRegistry(context.Background()); err != nil {
@@ -1113,17 +1121,6 @@ func (s *Server) Start() error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
-	if s.metrics != nil {
-		if err := s.metrics.Shutdown(ctx); err != nil {
-			s.logger.Warn("metrics shutdown failed", "err", err)
-		}
-	}
-	if s.otlpLogs != nil {
-		if err := s.otlpLogs.Shutdown(ctx); err != nil {
-			s.logger.Warn("logs shutdown failed", "err", err)
-		}
-	}
-
 	// Stop background workers (syncer + touch-cache pruner) and wait for the
 	// syncer's in-flight refreshes to drain before zeroing s.encKey.
 	stopWorkers()

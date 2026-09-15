@@ -32,6 +32,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/session"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/Infisical/agent-vault/internal/telemetry"
+	"github.com/Infisical/agent-vault/internal/traces"
 	"github.com/spf13/cobra"
 )
 
@@ -184,6 +185,7 @@ var serverCmd = &cobra.Command{
 		srv.AttachTelemetry(tel)
 		attachMetrics(srv, logger)
 		attachOTLPLogs(srv, logger, srv.Metrics())
+		attachTraces(srv, logger, srv.Metrics())
 		shutdownLogs := attachLogSink(srv, db, logger)
 		defer shutdownLogs()
 		if err := attachServerExtensions(srv, host, mitmPort, masterKey.Key(), db, logger, maxRespBytes, maxReqBytes); err != nil {
@@ -232,6 +234,7 @@ func attachMITMIfEnabled(srv *server.Server, host string, mitmPort int, masterKe
 			RateLimit:        srv.RateLimit(),
 			LogSink:          srv.LogSink(),
 			Metrics:          srv.Metrics(),
+			Traces:           srv.Traces(),
 			MaxResponseBytes: maxRespBytes,
 			MaxRequestBytes:  maxReqBytes,
 		},
@@ -260,6 +263,17 @@ func attachOTLPLogs(srv *server.Server, logger *slog.Logger, m *metrics.Metrics)
 		return
 	}
 	srv.AttachLogs(l)
+}
+
+func attachTraces(srv *server.Server, logger *slog.Logger, m *metrics.Metrics) {
+	t, err := traces.NewFromEnv(version, func() {
+		m.RecordExporterFailure(context.Background(), "traces")
+	})
+	if err != nil {
+		logger.Warn("traces export disabled", "err", err)
+		return
+	}
+	srv.AttachTraces(t)
 }
 
 // attachServerExtensions wires optional subsystems (MITM, Infisical) onto srv.
@@ -634,6 +648,7 @@ func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxR
 	srv.AttachTelemetry(tel)
 	attachMetrics(srv, logger)
 	attachOTLPLogs(srv, logger, srv.Metrics())
+	attachTraces(srv, logger, srv.Metrics())
 	shutdownLogs := attachLogSink(srv, db, logger)
 	defer shutdownLogs()
 	if err := attachServerExtensions(srv, host, mitmPort, key, db, logger, maxRespBytes, maxReqBytes); err != nil {

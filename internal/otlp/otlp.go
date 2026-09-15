@@ -1,8 +1,8 @@
 // Package otlp resolves the standard OTEL_* exporter configuration
-// shared by Agent Vault's metrics and logs signals and builds the
-// resource they both export under. Holding gating, protocol selection,
+// shared by Agent Vault's metrics, logs, and traces and builds the
+// resource they export under. Holding gating, protocol selection,
 // and resource construction in one place keeps every signal behaving
-// identically and leaves a single landing spot for traces later.
+// identically.
 package otlp
 
 import (
@@ -24,7 +24,7 @@ const (
 	ProtocolHTTPProtobuf = "http/protobuf"
 )
 
-// Enabled reports whether export of the given signal ("metrics", "logs")
+// Enabled reports whether export of the given signal ("metrics", "logs", "traces")
 // is on. OTEL_SDK_DISABLED kills everything; otherwise either the generic
 // OTEL_EXPORTER_OTLP_ENDPOINT or the per-signal endpoint enables it.
 func Enabled(signal string) bool {

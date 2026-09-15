@@ -17,6 +17,8 @@ func scrubEndpoints(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
 		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
 		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
 	} {
 		t.Setenv(v, "")
 	}
@@ -24,17 +26,17 @@ func scrubEndpoints(t *testing.T) {
 
 func TestEnabled(t *testing.T) {
 	scrubEndpoints(t)
-	if Enabled("metrics") || Enabled("logs") {
+	if Enabled("metrics") || Enabled("logs") || Enabled("traces") {
 		t.Fatal("no endpoint set: Enabled = true, want false")
 	}
 
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
-	if !Enabled("metrics") || !Enabled("logs") {
+	if !Enabled("metrics") || !Enabled("logs") || !Enabled("traces") {
 		t.Fatal("generic endpoint set: Enabled = false, want true for both signals")
 	}
 
 	t.Setenv("OTEL_SDK_DISABLED", "true")
-	if Enabled("metrics") || Enabled("logs") {
+	if Enabled("metrics") || Enabled("logs") || Enabled("traces") {
 		t.Fatal("OTEL_SDK_DISABLED=true: Enabled = true, want false")
 	}
 }

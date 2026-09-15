@@ -713,9 +713,13 @@ func TestMITMWebSocketSanitizesSwitchingResponseAndInjectedHeadersWin(t *testing
 }
 
 func TestMITMWebSocketHoldsProxyConcurrencyUntilTunnelCloses(t *testing.T) {
+	tr, spanRecorder := proxyTracer(t, "")
 	releaseUpstream := make(chan struct{})
 	upstreamReady := make(chan struct{}, 1)
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Traceparent") != "" || r.Header.Get("Baggage") != "" {
+			t.Error("WebSocket forwarded context outside the allowlist")
+		}
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			t.Errorf("upstream response writer cannot hijack")
@@ -758,7 +762,7 @@ func TestMITMWebSocketHoldsProxyConcurrencyUntilTunnelCloses(t *testing.T) {
 		}},
 	}}
 
-	proxyURL, clientRoots, p := setupProxy(t, sr, cp)
+	proxyURL, clientRoots, p := setupProxy(t, sr, cp, func(opts *Options) { opts.Traces = tr })
 	cfg := ratelimit.DefaultsFor(ratelimit.ProfileDefault)
 	cfg.Tiers[ratelimit.TierProxy].Concurrency = 1
 	cfg.Tiers[ratelimit.TierProxy].Rate = 100
@@ -788,6 +792,8 @@ func TestMITMWebSocketHoldsProxyConcurrencyUntilTunnelCloses(t *testing.T) {
 	key := "dGhlIHNhbXBsZSBub25jZQ=="
 	_, _ = fmt.Fprintf(firstTLS,
 		"GET /socket HTTP/1.1\r\n"+
+			"Traceparent: invalid\r\n"+
+			"Baggage: tenant=example\r\n"+
 			"Host: %s\r\n"+
 			"Upgrade: websocket\r\n"+
 			"Connection: Upgrade\r\n"+
@@ -808,6 +814,13 @@ func TestMITMWebSocketHoldsProxyConcurrencyUntilTunnelCloses(t *testing.T) {
 	case <-upstreamReady:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream did not hold first websocket open")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(spanRecorder.Ended()) < 4 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(spanRecorder.Ended()) != 4 {
+		t.Fatal("WebSocket request and upstream spans must end at the handshake, while the tunnel is still open")
 	}
 
 	secondConn := openMITMTunnel(t, proxyURL, clientRoots, upstreamTarget, "av_sess_ok")

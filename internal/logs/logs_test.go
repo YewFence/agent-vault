@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/Infisical/agent-vault/internal/requestlog"
 )
@@ -48,6 +49,19 @@ func testLogs(t *testing.T) (*Logs, *captureProcessor) {
 	l := NewFromProvider(provider)
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	return l, proc
+}
+
+func TestRecordTraceCorrelation(t *testing.T) {
+	l, proc := testLogs(t)
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	ctx, span := provider.Tracer("test").Start(context.Background(), "request")
+	defer span.End()
+	l.Record(ctx, sampleRecord())
+	rec := proc.only(t)
+	if rec.TraceID() != span.SpanContext().TraceID() || rec.SpanID() != span.SpanContext().SpanID() {
+		t.Fatal("OTLP log is not correlated with the active request span")
+	}
 }
 
 func attrMap(r sdklog.Record) map[string]string {
