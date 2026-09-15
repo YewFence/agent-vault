@@ -22,6 +22,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/datadir"
 	"github.com/Infisical/agent-vault/internal/infisical"
+	"github.com/Infisical/agent-vault/internal/logs"
 	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/notify"
@@ -182,6 +183,7 @@ var serverCmd = &cobra.Command{
 		srv := server.New(addr, db, masterKey.Key(), notifier, initialized, baseURL, logger)
 		srv.AttachTelemetry(tel)
 		attachMetrics(srv, logger)
+		attachOTLPLogs(srv, logger, srv.Metrics())
 		shutdownLogs := attachLogSink(srv, db, logger)
 		defer shutdownLogs()
 		if err := attachServerExtensions(srv, host, mitmPort, masterKey.Key(), db, logger, maxRespBytes, maxReqBytes); err != nil {
@@ -246,6 +248,20 @@ func attachMetrics(srv *server.Server, logger *slog.Logger) {
 	srv.AttachMetrics(m)
 }
 
+// attachOTLPLogs wires OTLP request-log export onto srv. Export failures
+// count against the shared exporter.failures metric whenever metrics are
+// enabled; a nil metrics handle makes the callback a no-op.
+func attachOTLPLogs(srv *server.Server, logger *slog.Logger, m *metrics.Metrics) {
+	l, err := logs.NewFromEnv(version, func() {
+		m.RecordExporterFailure(context.Background(), "logs")
+	})
+	if err != nil {
+		logger.Warn("logs export disabled", "err", err)
+		return
+	}
+	srv.AttachLogs(l)
+}
+
 // attachServerExtensions wires optional subsystems (MITM, Infisical) onto srv.
 // Both bootstrap paths (foreground and detached child) call this.
 func attachServerExtensions(srv *server.Server, host string, mitmPort int, masterKey []byte, db store.Store, logger *slog.Logger, maxRespBytes, maxReqBytes int64) error {
@@ -291,8 +307,12 @@ func attachInfisicalIfConfigured(srv *server.Server, logger *slog.Logger) {
 // rows. Returns a shutdown function the caller runs after Start()
 // returns to flush pending records and stop retention.
 func attachLogSink(srv *server.Server, db store.Store, logger *slog.Logger) func() {
-	sink := requestlog.NewBatchSink(db, logger, requestlog.BatchSinkConfig{})
-	srv.AttachLogSink(sink)
+	batch := requestlog.NewBatchSink(db, logger, requestlog.BatchSinkConfig{})
+	sinks := requestlog.MultiSink{batch}
+	if l := srv.Logs(); l != nil {
+		sinks = append(sinks, l)
+	}
+	srv.AttachLogSink(sinks)
 
 	retentionCtx, cancelRetention := context.WithCancel(context.Background())
 	go requestlog.RunRetention(retentionCtx, db, logger)
@@ -301,7 +321,7 @@ func attachLogSink(srv *server.Server, db store.Store, logger *slog.Logger) func
 		cancelRetention()
 		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := sink.Close(flushCtx); err != nil {
+		if err := batch.Close(flushCtx); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: request_log sink flush: %v\n", err)
 		}
 	}
@@ -613,6 +633,7 @@ func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxR
 	srv := server.New(addr, db, key, notifier, initialized, baseURL, logger)
 	srv.AttachTelemetry(tel)
 	attachMetrics(srv, logger)
+	attachOTLPLogs(srv, logger, srv.Metrics())
 	shutdownLogs := attachLogSink(srv, db, logger)
 	defer shutdownLogs()
 	if err := attachServerExtensions(srv, host, mitmPort, key, db, logger, maxRespBytes, maxReqBytes); err != nil {

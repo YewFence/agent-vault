@@ -22,6 +22,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/infisical"
+	"github.com/Infisical/agent-vault/internal/logs"
 	"github.com/Infisical/agent-vault/internal/metrics"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/netguard"
@@ -90,6 +91,7 @@ type Server struct {
 	oauthRefresher   *oauth.Refresher
 	telemetry        *telemetry.Telemetry
 	metrics          *metrics.Metrics
+	otlpLogs         *logs.Logs
 }
 
 // lockVaultServices acquires the per-vault mutation lock via the store's
@@ -138,6 +140,12 @@ func (s *Server) AttachMetrics(m *metrics.Metrics) { s.metrics = m }
 
 // Metrics returns the optional proxy metrics recorder.
 func (s *Server) Metrics() *metrics.Metrics { return s.metrics }
+
+// AttachLogs sets the optional OTLP request-log exporter.
+func (s *Server) AttachLogs(l *logs.Logs) { s.otlpLogs = l }
+
+// Logs returns the optional OTLP request-log exporter.
+func (s *Server) Logs() *logs.Logs { return s.otlpLogs }
 
 // captureEvent sends a telemetry event if telemetry is configured.
 // actor may be nil for pre-auth endpoints (login, register); callers
@@ -1108,6 +1116,11 @@ func (s *Server) Start() error {
 	if s.metrics != nil {
 		if err := s.metrics.Shutdown(ctx); err != nil {
 			s.logger.Warn("metrics shutdown failed", "err", err)
+		}
+	}
+	if s.otlpLogs != nil {
+		if err := s.otlpLogs.Shutdown(ctx); err != nil {
+			s.logger.Warn("logs shutdown failed", "err", err)
 		}
 	}
 

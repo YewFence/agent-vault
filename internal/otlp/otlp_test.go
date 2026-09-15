@@ -85,7 +85,7 @@ func TestNewResource(t *testing.T) {
 	}
 	attrs := make(map[string]string)
 	for _, kv := range res.Attributes() {
-		attrs[string(kv.Key)] = kv.Value.Emit()
+		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	if attrs["service.name"] != "agent-vault" {
 		t.Errorf("service.name = %q, want agent-vault", attrs["service.name"])
