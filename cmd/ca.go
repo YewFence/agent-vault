@@ -151,7 +151,7 @@ var caVerifyCmd = &cobra.Command{
 		}
 
 		if err := systemCAVerifier(certPEM, caPath); err != nil {
-			return fmt.Errorf("Agent Vault CA is not trusted by the native system store: %w", err)
+			return fmt.Errorf("the Agent Vault CA is not trusted by the native system store: %w", err)
 		}
 		return nil
 	},
@@ -243,7 +243,7 @@ func verifySystemCA(certPEM []byte, caPath string) error {
 	case "darwin":
 		command := exec.Command("security", "verify-cert", "-q", "-c", caPath, "-p", "ssl")
 		if output, err := command.CombinedOutput(); err != nil {
-			return fmt.Errorf("Keychain trust verification failed: %w: %s", err, strings.TrimSpace(string(output)))
+			return fmt.Errorf("keychain trust verification failed: %w: %s", err, strings.TrimSpace(string(output)))
 		}
 		return nil
 	default:

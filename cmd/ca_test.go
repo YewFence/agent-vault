@@ -200,7 +200,7 @@ if [ "$#" -ne 6 ] ||
 fi
 cp "$EXPECTED_CA" "$6"
 `
-	if err := os.WriteFile(trustPath, []byte(trustScript), 0o700); err != nil {
+	if err := os.WriteFile(trustPath, []byte(trustScript), 0o700); err != nil { //nolint:gosec // G306: executable test stub for the trust command
 		t.Fatal(err)
 	}
 	t.Setenv("EXPECTED_CA", caPath)

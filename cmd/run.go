@@ -684,7 +684,7 @@ func augmentEnvWithMITM(env []string, addr, token, vault, caPath string) ([]stri
 		return env, 0, false, fmt.Errorf("write CA: %w", err)
 	}
 	if err := systemCAVerifier(pem, caPath); err != nil {
-		return env, 0, false, fmt.Errorf("Agent Vault CA is not trusted by the native system store: %w; review `agent-vault ca install-script > agent-vault-ca-install.sh`, run the saved script, then retry (or use --isolation=container)", err)
+		return env, 0, false, fmt.Errorf("the Agent Vault CA is not trusted by the native system store: %w; review `agent-vault ca install-script > agent-vault-ca-install.sh`, run the saved script, then retry (or use --isolation=container)", err)
 	}
 
 	existingNoProxy := strings.Join([]string{envValue(env, "NO_PROXY"), envValue(env, "no_proxy")}, ",")

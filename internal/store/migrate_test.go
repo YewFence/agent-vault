@@ -139,7 +139,7 @@ func TestMigrateCAToDisk(t *testing.T) {
 	}
 
 	for path, want := range map[string]os.FileMode{
-		filepath.Join(caDir):               0700,
+		caDir:                              0700,
 		filepath.Join(caDir, "ca.crt.pem"): 0644,
 		filepath.Join(caDir, "ca.key.enc"): 0600,
 	} {

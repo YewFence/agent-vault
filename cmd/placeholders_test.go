@@ -132,7 +132,7 @@ func TestFetchServicePlaceholdersRejectsConflictingEnvironmentNames(t *testing.T
 func TestReferenceEnvironmentScript(t *testing.T) {
 	tempDir := t.TempDir()
 	binDir := filepath.Join(tempDir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
+	if err := os.Mkdir(binDir, 0o750); err != nil {
 		t.Fatalf("create bin dir: %v", err)
 	}
 	agentVaultStub := filepath.Join(binDir, "agent-vault")
@@ -145,7 +145,7 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 `
-	if err := os.WriteFile(agentVaultStub, []byte(stub), 0o755); err != nil {
+	if err := os.WriteFile(agentVaultStub, []byte(stub), 0o755); err != nil { //nolint:gosec // G306: executable agent-vault stub invoked via PATH
 		t.Fatalf("write agent-vault stub: %v", err)
 	}
 

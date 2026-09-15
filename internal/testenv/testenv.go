@@ -36,7 +36,7 @@ func Scrub() {
 	for _, env := range os.Environ() {
 		name, _, _ := strings.Cut(env, "=")
 		if strings.HasPrefix(name, EnvPrefix) {
-			os.Unsetenv(name)
+			_ = os.Unsetenv(name)
 		}
 	}
 }

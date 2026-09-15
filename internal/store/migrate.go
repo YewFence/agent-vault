@@ -1248,7 +1248,7 @@ func MigrateCAToDisk(ctx context.Context, src *SQLStore, caDir string) (bool, er
 	if err := os.MkdirAll(caDir, 0700); err != nil {
 		return false, fmt.Errorf("creating CA directory: %w", err)
 	}
-	if err := os.Chmod(caDir, 0700); err != nil {
+	if err := os.Chmod(caDir, 0700); err != nil { //nolint:gosec // G302: directory permissions, not a file
 		return false, fmt.Errorf("setting CA directory permissions: %w", err)
 	}
 
