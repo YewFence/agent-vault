@@ -169,9 +169,9 @@ func WriteProxyError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": proxyErrorMessagePrefix + message})
 }
 
-// writeProxyErrorWithHelp is like WriteProxyError but appends an optional
-// help field when baseURL is non-empty.
-func writeProxyErrorWithHelp(w http.ResponseWriter, status int, code, message, baseURL string) {
+// WriteProxyErrorWithHelp is like WriteProxyError but appends a help
+// field when baseURL is non-empty.
+func WriteProxyErrorWithHelp(w http.ResponseWriter, status int, code, message, baseURL string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(ProxyErrorHeader, "true")
 	w.WriteHeader(status)
@@ -229,16 +229,16 @@ func WriteInjectError(w http.ResponseWriter, err error, targetHost, vaultName, b
 	case errors.Is(err, ErrServiceNotFound):
 		WriteForbiddenHint(w, targetHost, vaultName, baseURL)
 	case errors.Is(err, ErrServiceDisabled):
-		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
+		WriteProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			fmt.Sprintf("Broker service matching host %q in vault %q is currently disabled", targetHost, vaultName), baseURL)
 	case errors.Is(err, ErrOAuthNotConnected):
-		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
+		WriteProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			"OAuth credential is approved but not yet connected — complete the connection in the Agent Vault dashboard", baseURL)
 	case errors.Is(err, ErrOAuthRefreshFailed):
-		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
+		WriteProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			"OAuth token expired and refresh failed — reconnect in the Agent Vault dashboard", baseURL)
 	case errors.Is(err, ErrCredentialMissing):
-		writeProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
+		WriteProxyErrorWithHelp(w, semantics.Status, semantics.ResponseCode,
 			"A required credential could not be resolved; check vault configuration", baseURL)
 	default:
 		WriteProxyError(w, semantics.Status, semantics.ResponseCode,

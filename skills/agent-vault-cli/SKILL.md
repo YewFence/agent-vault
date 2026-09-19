@@ -77,9 +77,15 @@ status code.
   destination before contacting it. Report the blocked destination and ask an
   operator to review the private-range policy or narrow network allowlist; do
   not retry blindly.
-- `502` may mean a credential is missing, the upstream is unreachable, or an
-  OAuth connection needs attention. Report the structured error code and the
-  local checks already performed instead of retrying blindly.
+- `502` may mean a credential is missing, an OAuth connection needs attention,
+  or the upstream is unreachable. Unreachable upstreams carry a specific code
+  (`dns_error`, `connection_refused`, `dial_timeout`, `upstream_timeout`,
+  `tls_unknown_authority`, `tls_hostname_mismatch`, `tls_client_cert_required`,
+  `tls_certificate_invalid`, `tls_handshake_failed`, or the fallback
+  `upstream_error`), and the message includes the target `host:port`. Report
+  the structured error code and the local checks already performed instead of
+  retrying blindly; TLS trust and mTLS failures need an operator to trust the
+  upstream CA or configure a client certificate.
 
 Create, inspect, or poll a proposal only when the user explicitly asks you to
 handle it. Before doing so, read

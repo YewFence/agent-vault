@@ -1267,7 +1267,7 @@ func TestMITMRateLimitDenialIdentifiesAgentVault(t *testing.T) {
 func TestMITMUpstreamFailureIdentifiesAgentVault(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	status, code := writeUpstreamFailure(recorder, errors.New("upstream unavailable"))
+	status, code := (&Proxy{}).writeUpstreamFailure(recorder, "upstream.example:8443", errors.New("upstream unavailable"))
 
 	if status != http.StatusBadGateway || code != "upstream_error" {
 		t.Fatalf("result = (%d, %q), want (502, upstream_error)", status, code)

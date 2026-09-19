@@ -35,15 +35,20 @@ func (fw *flushingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func writeUpstreamFailure(w http.ResponseWriter, err error) (int, string) {
+// writeUpstreamFailure responds to the agent with the classified cause
+// of an upstream transport failure. The response carries only the
+// classified code, a short reason, and the target address — the raw
+// error goes to the server log at the call sites.
+func (p *Proxy) writeUpstreamFailure(w http.ResponseWriter, target string, err error) (int, string) {
 	if errors.Is(err, netguard.ErrNetworkPolicyBlocked) {
 		brokercore.WriteProxyError(w, http.StatusForbidden, "ssrf_blocked",
 			"The requested destination is blocked by the proxy network policy.")
 		return http.StatusForbidden, "ssrf_blocked"
 	}
-	brokercore.WriteProxyError(w, http.StatusBadGateway, "upstream_error",
-		"the proxy could not reach the upstream service")
-	return http.StatusBadGateway, "upstream_error"
+	f := classifyUpstreamError(err)
+	brokercore.WriteProxyErrorWithHelp(w, http.StatusBadGateway, f.Code,
+		fmt.Sprintf("%s (%s)", f.Reason, target), p.baseURL)
+	return http.StatusBadGateway, f.Code
 }
 
 // actorFromScope returns the (type, id) pair used in request log rows.
@@ -398,7 +403,7 @@ func (p *Proxy) forwardRequest(
 		p.traces.Inject(attemptCtx, host, req.Header)
 		resp, rtErr := p.upstream.RoundTrip(req)
 		if rtErr != nil {
-			span.End("upstream_error")
+			span.End(classifyUpstreamError(rtErr).Code)
 		} else {
 			span.ResponseHeaders(resp.StatusCode)
 		}
@@ -406,13 +411,14 @@ func (p *Proxy) forwardRequest(
 	}
 	resp, err := roundTrip(outReq)
 	if err != nil {
-		p.logger.Debug("upstream request failed",
+		status, code := p.writeUpstreamFailure(w, target, err)
+		p.logger.Warn("upstream request failed",
 			slog.String("vault_id", scope.VaultID),
 			slog.String("vault_name", scope.VaultName),
 			slog.String("target_host", target),
+			slog.String("error_code", code),
 			slog.String("error", err.Error()),
 		)
-		status, code := writeUpstreamFailure(w, err)
 		emit(status, code)
 		return
 	}
@@ -446,7 +452,14 @@ func (p *Proxy) forwardRequest(
 					slog.Int("status", resp.StatusCode),
 				)
 			} else {
-				status, code := writeUpstreamFailure(w, retryRTErr)
+				status, code := p.writeUpstreamFailure(w, target, retryRTErr)
+				p.logger.Warn("oauth retry upstream request failed",
+					slog.String("vault_id", scope.VaultID),
+					slog.String("vault_name", scope.VaultName),
+					slog.String("target_host", target),
+					slog.String("error_code", code),
+					slog.String("error", retryRTErr.Error()),
+				)
 				emit(status, code)
 				return
 			}

@@ -116,7 +116,7 @@ docker run -it -p 14321:14321 -p 14322:14322 \
 
 The server starts the HTTP API on port `14321` and a transparent HTTP/HTTPS proxy on port `14322`; the same listener handles `CONNECT` for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams.
 
-When the proxy's SSRF protection rejects a destination, the client receives `403 ssrf_blocked` and the Logs view records that policy denial separately from genuine `502 upstream_error` failures.
+When the proxy's SSRF protection rejects a destination, the client receives `403 ssrf_blocked` and the Logs view records that policy denial separately from genuine upstream failures, which carry specific `502` error codes such as `dns_error`, `connection_refused`, `tls_unknown_authority`, or `tls_client_cert_required` instead of a bare `upstream_error`.
 
 The web UI becomes available at `http://<host>:14321` and you'll be prompted to create the first user known as the instance **owner**.
 

@@ -77,7 +77,12 @@ func (p *Proxy) forwardWebSocket(
 	p.traces.Inject(ctx, outReq.URL.Hostname(), outReq.Header)
 	upstreamConn, upstreamReader, resp, err := p.dialWebSocketUpstream(ctx, outReq)
 	if err != nil {
-		status, code := writeUpstreamFailure(w, err)
+		status, code := p.writeUpstreamFailure(w, outReq.URL.Host, err)
+		p.logger.Warn("websocket upstream request failed",
+			slog.String("target_host", outReq.URL.Host),
+			slog.String("error_code", code),
+			slog.String("error", err.Error()),
+		)
 		emit(status, code)
 		return
 	}

@@ -168,7 +168,16 @@ See [Proposals](/learn/proposals) for the full proposal lifecycle, including sto
 | 403 `ssrf_blocked` | The destination resolved to an address blocked by Agent Vault's network policy | Surface the policy denial to the user; don't retry unless an operator changes the private-range policy or network allowlist. |
 | 409 `multiple services match host …` | Service mutation (`PATCH`/`DELETE`) used a bare host that matches several path-scoped services | Retry with the canonical service `name` from `/discover`. The response body includes a `candidates` array. |
 | 429 | Rate limited | Respect the `Retry-After` header. |
-| 502 | Missing credential or upstream unreachable | Tell the user a credential may need to be added. |
+| 502 `credential_not_found` / `oauth_not_connected` / `oauth_refresh_failed` | A required credential is missing or an OAuth connection needs attention | Tell the user which credential key is missing or which connection needs refreshing. |
+| 502 `dns_error` | The proxy could not resolve the upstream host | Surface the message; likely a typo'd host or internal DNS gap. Don't retry. |
+| 502 `connection_refused` | Nothing is listening on the upstream port (or a firewall rejected it) | Check the host/port in the message; don't retry. |
+| 502 `dial_timeout` / `upstream_timeout` | Connecting to / waiting for the upstream timed out | Retry with backoff; if it persists, surface to the user. |
+| 502 `tls_unknown_authority` | The upstream TLS certificate is not trusted (self-signed or unknown CA) | Surface to the user; an operator must trust the upstream CA or configure a client-certificate transport. |
+| 502 `tls_hostname_mismatch` | The upstream TLS certificate has no DNS name or IP SAN matching the target `host:port` in the message | Surface to the user; the upstream needs a certificate that covers the requested host or IP. |
+| 502 `tls_client_cert_required` | The upstream requires a TLS client certificate (mTLS) | Surface to the user; the service needs a client-certificate transport configured by an operator. |
+| 502 `tls_certificate_invalid` | The upstream TLS certificate is otherwise invalid (e.g. expired) | Surface to the user; the upstream certificate needs renewal. |
+| 502 `tls_handshake_failed` | The TLS handshake with the upstream failed for another reason | Surface the message; don't retry blindly. |
+| 502 `upstream_error` | The proxy could not reach the upstream for an unclassified reason | Surface the message (includes the target `host:port`) to the user. |
 
 <Note>
 Path-based service matching changed how request log rows are filtered. The `matched_service` field in `GET /v1/vaults/{vault}/logs` rows holds the canonical service **name** for new rows; rows written before the upgrade still carry the matched **host**. Operators querying `?service=` should use the slug for new rows and the host for old rows. The matched service's `host` pattern is not returned in log rows — recover it by listing `GET /v1/vaults/{vault}/services` and filtering by `name`, or reading `/discover`.
